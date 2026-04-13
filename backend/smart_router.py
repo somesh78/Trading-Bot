@@ -21,7 +21,15 @@ import logging
 import asyncio
 import time
 import math
-from typing import Dict, Any, Optional, Tuple
+import random
+import uuid
+import datetime
+from typing import Dict, Any, Optional, Tuple, List
+from dotenv import load_dotenv
+
+# Force load .env in GraphEngine process
+for env_path in [".env", "backend/.env", "../backend/.env"]:
+    load_dotenv(env_path)
 
 import httpx
 
@@ -33,9 +41,10 @@ logger = logging.getLogger("sentinel.router")
 
 PRIMARY_MODEL   = "meta-llama/llama-3.3-70b-instruct:free"
 SECONDARY_MODEL = "google/gemini-2.0-flash-001"
-TERTIARY_MODEL  = "nvidia/nemotron-3-super-free"
+TERTIARY_MODEL  = "deepseek/deepseek-chat" # Added a paid-tier-like provider for speed
+BACKUP_MODEL    = "mistralai/mistral-7b-instruct:free"
 
-MODEL_CHAIN = [PRIMARY_MODEL, SECONDARY_MODEL, TERTIARY_MODEL]
+MODEL_CHAIN = [PRIMARY_MODEL, SECONDARY_MODEL, TERTIARY_MODEL, BACKUP_MODEL]
 
 
 # =====================================================================
@@ -128,7 +137,7 @@ PORTFOLIO: {portfolio_summary}
 HISTORICAL CONTEXT: {historical_context}
 
 DECISION CRITERIA:
-1. Only trade if confidence > 80% unless regime is BULL or ENV is Paper.
+1. In Paper mode or BULL regime, you are a HIGH-CONVICTION SCALPER. Confidence > 60% is plenty. Be aggressive.
 2. Short-selling only allowed if regime is BEAR or CRASH.
 3. If regime is BEAR, focus on Oversold Reversals (RSI < 30) and Bullish Divergence. You have permission to take counter-trend scalps with tight 1% stop-losses.
 4. Output MUST be valid JSON.
@@ -162,11 +171,11 @@ def _heuristic_decision(mkt: Dict) -> Dict[str, Any]:
     macd   = mkt.get("macd", 0) if isinstance(mkt, dict) else 0
     macd_s = mkt.get("macd_sig", 0) if isinstance(mkt, dict) else 0
 
-    # Simple momentum heuristic
+    # Simple momentum heuristic (Boosted for Paper mode execution)
     if rsi < 35 and change > 0 and macd > macd_s:
         action = "BUY"
-        confidence = 55
-        reasoning = "Heuristic: RSI oversold + positive momentum + MACD bullish cross"
+        confidence = 75
+        reasoning = "Heuristic Sniper: RSI oversold + momentum + MACD bullish"
     elif rsi > 65 and change < 0 and macd < macd_s:
         action = "SELL"
         confidence = 50
@@ -199,18 +208,26 @@ class SmartRouter:
     """
 
     def __init__(self, api_key: Optional[str] = None, broadcast_fn = None):
-        self.api_key          = api_key or os.getenv("GROQ_KEY") or os.getenv("OPENROUTER_KEY")
-        self._broadcast       = broadcast_fn
+        # Priority: Passed key -> GROQ_KEY env -> OPENROUTER_KEY env
+        self.api_key = api_key or os.getenv("GROQ_KEY") or os.getenv("OPENROUTER_KEY")
+        self._broadcast = broadcast_fn
         
-        # FIX: Detect if we should hit Groq directly instead of via OpenRouter
-        if self.api_key and self.api_key.startswith("gsk_"):
+        if not self.api_key:
+            logger.error("[ROUTER] ❌ NO API KEY FOUND in config or environment variables!")
+        else:
+            masked = f"{self.api_key[:6]}...{self.api_key[-4:]}"
+            logger.info(f"[ROUTER] Initialized with key: {masked}")
+
+        # FIX: Robustly detect Groq vs OpenRouter
+        if self.api_key and (self.api_key.startswith("gsk_") or "groq" in os.getenv("GROQ_KEY", "").lower()):
             self.base_url = "https://api.groq.com/openai/v1"
             self.is_groq  = True
-            logger.info("[ROUTER] Groq key detected - using native Groq endpoint")
+            logger.info("[ROUTER] Groq endpoint selected")
         else:
             self.base_url = "https://openrouter.ai/api/v1"
             self.is_groq  = False
-
+            logger.info("[ROUTER] OpenRouter endpoint selected")
+        
         self._cooloff_until:  float = 0
         self._cooloff_duration = 60   # base cooloff — doubles each consecutive 429
         self._cooloff_max      = 300  # cap at 5 minutes
@@ -284,6 +301,8 @@ class SmartRouter:
                     if self._consecutive_429 >= 3:
                         self.primary_dead = True
                         self._stats["primary_dead"] = True
+                    # FIX: Add a small sleep to avoid immediate loop-hammering
+                    await asyncio.sleep(2.0)
                     return None
 
                 if r.status_code == 404:

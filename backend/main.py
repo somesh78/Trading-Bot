@@ -22,7 +22,9 @@ from dotenv import load_dotenv
 from graph_engine import GraphEngine
 from state_definition import SETUP_SQL, print_setup_sql
 
-load_dotenv()
+# More robust .env loading (check both backend/ and parent)
+for env_path in [".env", "backend/.env", "../backend/.env"]:
+    load_dotenv(env_path)
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
@@ -51,34 +53,34 @@ _connections: List[WebSocket] = []
 
 # ── Config schema (from frontend SidebarControls) ───────────────
 class Config(BaseModel):
-    groq_key:            str   = os.getenv("GROQ_KEY", "")
+    groq_key:            str   = os.getenv("GROQ_KEY") or os.getenv("OPENROUTER_KEY") or ""
     fmp_key:             str   = ""
     news_key:            str   = ""
-    finnhub_key:         str   = os.getenv("FINNHUB_KEY", "")      # NEW — Finnhub free tier
-    alphav_key:          str   = os.getenv("ALPHAV_KEY", "")       # NEW — Alpha Vantage free tier
+    finnhub_key:         str   = os.getenv("FINNHUB_KEY", "")
+    alphav_key:          str   = os.getenv("ALPHAV_KEY", "")
     supabase_url:        str   = os.getenv("SUPABASE_URL", "")
     supabase_key:        str   = os.getenv("SUPABASE_KEY", "")
     capital:             float = float(os.getenv("CAPITAL", 500.0))
     risk:                float = float(os.getenv("RISK_PCT", 3.0)) / 100
-    max_trades:          int   = int(os.getenv("MAX_MISSIONS", 200))
+    max_trades:          int   = 999999
     env:                 str   = os.getenv("ENV", "paper")
-    min_conf:            int   = int(os.getenv("MIN_CONF", 75))
+    min_conf:            int   = 55
     primary_market:      str   = "AUTO"
     BEAR_SL_PCT:         float = float(os.getenv("BEAR_SL_PCT", 2.5))
     BEAR_TP_PCT:         float = float(os.getenv("BEAR_TP_PCT", 1.5))
-    min_conviction:      float = float(os.getenv("BEAR_MIN_SCORE", 20.0))
+    min_conviction:      float = 5.0
     bear_min_conds:      int   = int(os.getenv("BEAR_MIN_CONDS", 2))
-    regime_filter:       str   = "bull_sideways"
+    regime_filter:       str   = "all"
     delay:               int   = 6
     target_pnl:          float = 999999.0
-    max_dd:              float = 0.15
+    max_dd:              float = 0.50
     live_data:           bool  = False
     use_crash_guard:     bool  = True
     use_multi_filter:    bool  = True
     use_reasoning:       bool  = True
     auto_execute:        bool  = True
     use_multi_timeframe: bool  = True
-    mtf_min_confluence:  float = 0.67
+    mtf_min_confluence:  float = 0.50
     global_mode:         bool  = False
     vats_k:              float = 2.5
 

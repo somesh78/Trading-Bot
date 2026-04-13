@@ -165,8 +165,9 @@ class NewsMonitor:
     Uses NewsData.io free tier (100 req/day) or falls back to simulation.
     """
 
-    def __init__(self, api_key: Optional[str] = None):
+    def __init__(self, api_key: Optional[str] = None, is_paper: bool = True):
         self.api_key = api_key
+        self.is_paper = is_paper
         self.threat_level = "LOW"
         self.threat_score = 0
         self.triggered_keywords: List[str] = []
@@ -204,24 +205,26 @@ class NewsMonitor:
 
     def _simulate_news(self) -> Dict[str, Any]:
         """Simulate news when API is unavailable."""
-        # Occasionally inject a black swan for testing
+        if self.is_paper:
+            logger.info("[NEWS] Paper mode: news monitor disabled, threat hardcoded to LOW")
+            self.threat_level = "LOW"
+            self.threat_score = 0
+            self.triggered_keywords = []
+            return {
+                "threat_level": "LOW",
+                "threat_score": 0,
+                "triggered_keywords": [],
+                "headline_count": 0
+            }
+
+        # Real simulation (non-paper)
         normal_headlines = [
             "fed signals steady rate path amid strong employment data",
             "tech stocks rally on ai optimism",
             "nse gains on positive global cues",
             "crude oil stabilizes after opec+ decision",
         ]
-        # 0% chance of a black swan event in simulation (fixing Issue 5)
-        if False: # random.random() < 0.05
-            shock = random.choice([
-                "conflict escalates in eastern europe, markets in turmoil",
-                "emergency rate hike announced by central bank",
-                "regional bank halt operations amid liquidity crisis",
-            ])
-            headlines = [shock] + normal_headlines
-        else:
-            headlines = normal_headlines
-
+        headlines = normal_headlines
         return self._analyze_headlines(headlines)
 
     def _analyze_headlines(self, headlines: List[str]) -> Dict[str, Any]:

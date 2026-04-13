@@ -764,10 +764,15 @@ class CircuitBreaker:
                 return self._trip(f"Volatility spike: {recent:.2f}% vs {baseline:.2f}%")
         
         # Breadth Collapse Check
+        # Skip breadth check when fewer than 5 assets pass the in-play filter
+        # (crypto-only scans typically return 2-3 assets, not enough to judge breadth)
         declining = len([s for s in all_stocks if s["change"] < 0])
-        if all_stocks and declining / len(all_stocks) > 0.85:
-            # Task 1: Relax Safety Handbrake in Paper Mode
-            if paper_mode and any(s.get("_score", 0) > 20 for s in all_stocks):
+        total = len(all_stocks)
+        if total < 5:
+            logger.debug(f"[CB] Breadth check skipped: only {total} assets scanned (need 5+)")
+        elif total > 0 and declining / total > 0.95:
+            # Relax Safety Handbrake in Paper Mode for high-conviction outliers
+            if paper_mode and any(s.get("_score", 0) > 5.0 for s in all_stocks):
                 logger.info("[CB] Paper Mode Bypass: Executing on high-conviction outlier.")
                 return False
             return self._trip(f"Breadth collapse: {declining}/{len(all_stocks)} declining")

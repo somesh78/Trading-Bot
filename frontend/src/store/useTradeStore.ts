@@ -83,7 +83,7 @@ export const useTradeStore = create<TradeState>((set) => ({
   setConnectionStatus: (status) => set({ connectionStatus: status }),
   
   addLog: (log) => set((state) => ({ 
-    logs: [log, ...state.logs].slice(0, 100) 
+    logs: [...state.logs, log].slice(-100)
   })),
 
   reset: () => set({
@@ -173,13 +173,13 @@ export const useTradeStore = create<TradeState>((set) => ({
 
         case 'log':
           set((state) => ({ 
-            logs: [{
+            logs: [...state.logs, {
               id: Math.random().toString(36).substr(2, 9),
               tagType: data.level || 'sys',
               tag: (data.level || 'sys').toUpperCase(),
               msg: data.msg,
               time: data.time || new Date().toLocaleTimeString()
-            }, ...state.logs].slice(0, 100)
+            }].slice(-100)  // keep last 100 entries (newest at bottom)
           }))
           break;
 
@@ -195,13 +195,13 @@ export const useTradeStore = create<TradeState>((set) => ({
           console.error("[WS] Backend Error:", data.msg);
           set((state) => ({ 
             engineStatus: 'IDLE',
-            logs: [{
+            logs: [...state.logs, {
               id: Math.random().toString(36).substr(2, 9),
               tagType: 'err',
               tag: 'ERROR',
               msg: data.msg,
               time: new Date().toLocaleTimeString()
-            }, ...state.logs].slice(0, 100)
+            }].slice(-100)  // keep last 100 entries (newest at bottom)
           }));
           break;
     }

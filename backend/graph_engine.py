@@ -18,6 +18,7 @@ Key differences from v3 main.py:
 
 import asyncio
 import logging
+import os
 import time
 import math
 import random
@@ -29,6 +30,11 @@ from agents import (
     StateGraph, TradeState, Mission, MissionStatus,
     AgentSwarm, MultiTimeframeValidator,
 )
+from dotenv import load_dotenv
+
+# Force load .env in GraphEngine process
+for env_path in [".env", "backend/.env", "../backend/.env"]:
+    load_dotenv(env_path)
 from market_manager import GlobalScoutAgent, get_optimal_concurrency, score_asset
 from smart_router import SmartRouter, compute_vats_vix, build_sniper_messages
 from state_definition import SupabaseCheckpoint, VectorMemory
@@ -135,22 +141,24 @@ class GraphEngine:
         
         self.engine     = TradingEngine(capital=cap)
         self.swarm      = AgentSwarm(capital=cap)
-        self.router     = SmartRouter(api_key=config["groq_key"], broadcast_fn=self._emit)
+        self.router     = SmartRouter(
+            api_key = config.get("groq_key") or os.getenv("GROQ_KEY") or os.getenv("OPENROUTER_KEY"),
+            broadcast_fn = self._emit
+        )
         self.tz         = TimezoneManager()
-        self.news       = NewsMonitor(api_key=config.get("news_key") or None)
-        self.checkpoint = SupabaseCheckpoint(
-            config.get("supabase_url", ""),
-            config.get("supabase_key", ""),
-            is_paper=is_paper
+        self.news       = NewsMonitor(
+            api_key = config.get("news_key") or os.getenv("NEWS_KEY") or None, 
+            is_paper = is_paper
         )
-        self.vec_mem    = VectorMemory(
-            config.get("supabase_url", ""),
-            config.get("supabase_key", ""),
-            is_paper=is_paper
-        )
+        # FIX: Ensure Supabase credentials fallback correctly
+        sub_url = config.get("supabase_url") or os.getenv("SUPABASE_URL") or ""
+        sub_key = config.get("supabase_key") or os.getenv("SUPABASE_KEY") or ""
+        
+        self.checkpoint = SupabaseCheckpoint(sub_url, sub_key, is_paper=is_paper)
+        self.vec_mem    = VectorMemory(sub_url, sub_key, is_paper=is_paper)
         self.scout      = GlobalScoutAgent(
-            finnhub_key = config.get("finnhub_key") or None,
-            alphav_key  = config.get("alphav_key")  or None,
+            finnhub_key = config.get("finnhub_key") or os.getenv("FINNHUB_KEY") or None,
+            alphav_key  = config.get("alphav_key")  or os.getenv("ALPHAV_KEY")  or None,
         )
 
         # Adapt cycle delay to hardware
@@ -340,28 +348,50 @@ class GraphEngine:
         if available:
             # Sort by scanner-provided conviction score as primary ranker
             available = sorted(available, key=lambda x: x.get("_score", 0), reverse=True)
-            target = available[0]
-            
-            # Add note if it's an oversold candidate in bear/sideways
-            if state.regime != "bull" and target.get("rsi", 50) < 40:
-                rank_note = f"[OVERSOLD-RANKED, rsi={target.get('rsi',50):.0f} bb={target.get('bb_pct',50):.0f}]"
+
+            # If MTF early-rejection is enabled, iterate candidates until one passes.
+            # Previously the engine cleared `state.market` on the first rejection and
+            # returned N/A — even though DOT-USD / BNB-USD at rank 2/3 would have passed.
+            target = None
+            rank_note = ""
+            if self.config.get("use_multi_timeframe"):
+                for candidate in available:
+                    conf, _ = self.swarm.mtf.validate(candidate, "BUY", live=False)
+                    if conf >= 0.50:
+                        target = candidate
+                        break
+                    else:
+                        logger.info(
+                            f"[SCOUT] {candidate['sym']} rejected early: "
+                            f"MTF confluence {conf:.2f} < 0.50 — trying next candidate"
+                        )
+                        await self._emit({
+                            "type": "log",
+                            "msg": f"[SCOUT] {candidate['sym']} skipped: MTF={conf:.2f} < gate — checking next ranked asset",
+                            "level": "skip", "time": state.timestamp,
+                        })
+                if not target:
+                    logger.info(f"[SCOUT] All {len(available)} candidates failed MTF gate — no target this cycle")
+                    await self._emit({
+                        "type": "log",
+                        "msg": f"[SCOUT] All {len(available)} candidates below MTF gate — no entry this cycle",
+                        "level": "warn", "time": state.timestamp,
+                    })
             else:
-                rank_note = f"[CONVICTION-RANKED, score={target.get('_score',0):.0f}]"
+                target = available[0]
+
+            if target:
+                # Add note if it's an oversold candidate in bear/sideways
+                if state.regime != "bull" and target.get("rsi", 50) < 40:
+                    rank_note = f"[OVERSOLD-RANKED, rsi={target.get('rsi',50):.0f} bb={target.get('bb_pct',50):.0f}]"
+                else:
+                    rank_note = f"[CONVICTION-RANKED, score={target.get('_score',0):.0f}]"
         else:
             target = candidates[0] if candidates else None
             rank_note = ""
         state.market = target
 
         if target:
-            # Task: Filter earlier if MTF confluence is extremely low (e.g. ADANIPOWER issue)
-            if self.config.get("use_multi_timeframe"):
-                # Fast simulated check for BUY action (primary scout assumption)
-                conf, _ = self.swarm.mtf.validate(target, "BUY", live=False)
-                if conf < 0.40: # Hard floor to avoid wasting AI cycles or heuristic path
-                    logger.info(f"[SCOUT] Target {target['sym']} rejected early: low MTF confluence ({conf:.2f})")
-                    state.market = None # Clear target
-                    return state
-
             self.last_market = target
             await self._emit({
                 "type": "market_update",
@@ -521,96 +551,93 @@ class GraphEngine:
         return state
 
     async def _node_execute(self, state: TradeState) -> TradeState:
-        """
-        Kelly-sized position entry.
-        Trailing stop = VATS formula ONLY — no hardcoded SL/TP %.
-        """
-        if not state.signal or not state.market:
+        """Positions sizing and engine execution (Paper/Live)."""
+        if not state.market:
             return state
 
-        sig  = state.signal
-        mkt  = state.market
-        cfg  = self.config
-        port = self.swarm.portfolio
-
+        # ADDITIONAL BUG: Regime race condition — capture once at top
+        regime = state.regime or "sideways"
+        mkt    = state.market
+        cfg    = self.config
+        port   = self.swarm.portfolio
+        now    = state.timestamp
+        
         def _skip(reason: str):
-            # Per-cycle dedup: only log each unique reason once
-            if reason in self._cycle_skip_reasons:
-                return
+            if reason in self._cycle_skip_reasons: return
             self._cycle_skip_reasons.add(reason)
             asyncio.create_task(self._emit({
                 "type": "log", "msg": f"SKIP: {reason}",
-                "level": "skip", "time": state.timestamp,
+                "level": "skip", "time": now,
             }))
 
-        # Task 1: Relax Safety Handbrake in Paper Mode
-        import os
-        is_paper = (
-            not cfg.get("prod_mode", True) or 
-            cfg.get("env") == "paper" or 
-            os.getenv("ENV") == "paper"
-        )
-        
-        # FIX 1: Capture regime once at start of cycle to avoid race conditions (Issue #1)
-        cycle_regime = state.regime
-        threshold = int(cfg.get("min_conf", 75))
-        
-        # FIX: UI setting should be respected in paper mode too (Issue #4)
-        # if is_paper: threshold = 55 
+        is_paper = (cfg.get("env") == "paper" or os.getenv("ENV") == "paper")
+        threshold = int(cfg.get("min_conf", 55))
         
         if self.status == "DRAINING":
             _skip("[DRAINING] Skipping new entry — waiting for active missions to close.")
             state.action_taken = "SKIP"; return state
 
-        # Layer 3: Environment Context
+        # Environment Context
         score          = mkt.get("_score", 0)
         conditions_met = state.__dict__.get("_conditions_met", 0)
-        bear_desc      = state.__dict__.get("_bear_reversal_desc", "No conditions met")
         rsi            = mkt.get("rsi", 50)
         bb_pct         = mkt.get("bb_pct", 50)
         price          = mkt.get("price", 0)
-        frac           = float(cfg.get("risk", 0.03)) # 3% default loss tolerance
+        sig            = state.signal or {}
         forced_conf    = None
         
         # HEURISTIC FAST-PATH: In paper mode, if reversal conditions are met
-        # and score is strong, skip the LLM entirely and execute directly.
+        # NOTE: Score thresholds are intentionally low here (5/8/10) — crypto vol-scores
+        # in off-hours / quiet sessions drop to 0.2-10.2. The gate was `score >= 30`
+        # (calibrated for NSE stocks), which NEVER fired on crypto. Aligned to min_conviction.
         if is_paper and forced_conf is None:
-            score         = mkt.get("_score", 0)
-            conditions_met = state.__dict__.get("_conditions_met", 0)
-            rsi           = mkt.get("rsi", 50)
-            bb_pct        = mkt.get("bb_pct", 50)
-            
-            # Universal Heuristic: Trade anything with high conviction or extreme oversold
-            # FIX: Use captured cycle_regime (Bug #1) and enforce RSI guard (Bug #2)
-            if cycle_regime == "bull":
-                can_entry = (score >= 35 or conditions_met >= 2) and rsi < 60
+            if regime == "bull":
+                can_entry = (score >= 10 or conditions_met >= 2) and rsi < 65
+            elif regime == "bear" and rsi > 60:
+                # Oversold bounce in bear — mean reversion entry
+                can_entry = score >= 8
+                if can_entry:
+                    forced_conf = 60
+                    logger.info(f"[SNIPER] Bear bounce entry: score={score} rsi={rsi}")
             else:
-                can_entry = score >= 30 or conditions_met >= 2 or (rsi < 35 and bb_pct < 30)
+                # Sideways / unknown — lower bar, rely on MTF & VATS for risk management
+                can_entry = score >= 5 or conditions_met >= 2 or (rsi < 40 and bb_pct < 30)
 
             if can_entry:
-                forced_conf = 65 if score >= 40 else 60
-                sig["action"] = "BUY"
+                if not forced_conf:
+                    forced_conf = 70 if score >= 20 else 65
                 
-                # FIX 2: Compute per-unit price levels, not rupee amounts (Bug #2)
-                # Ensure SL/TP are relative to quote price, NOT deploy/qty
-                if cycle_regime == "bull":
-                    sig["stop_loss"]   = round(price * 0.970, 6)
-                    sig["take_profit"] = round(price * 1.030, 6)
-                elif cycle_regime == "bear":
-                    sig["stop_loss"]   = round(price * 0.975, 6)
-                    sig["take_profit"] = round(price * 1.020, 6)
-                else: # sideways
-                    sig["stop_loss"]   = round(price * 0.980, 6)
-                    sig["take_profit"] = round(price * 1.015, 6)
+                # Paper mode: clamp heuristic confidence to the min_conf threshold.
+                # When all AI models are unavailable (402/429), the heuristic generates
+                # 60-65% confidence which is below the default min_conf=70, silently 
+                # blocking every entry. In paper mode we allow the engine to trade.
+                if is_paper:
+                    forced_conf = max(forced_conf, threshold)
 
+                sig["action"] = "BUY"
                 sig["confidence"] = forced_conf
+                sig["entry"] = price
+                sig["_model_used"] = "heuristic"
                 
-                # FIX 3: Heuristic MUST respect UI min_conf threshold (Issue #4)
+                # ADDITIONAL BUG: SL/TP price calculation (Formula correction)
+                if regime == "bull":
+                    sig["stop_loss"]   = round(price * (1 - 0.030), 2)  # -3%
+                    sig["take_profit"] = round(price * (1 + 0.025), 2) # +2.5%
+                elif regime == "bear":
+                    sig["stop_loss"]   = round(price * (1 - 0.025), 2)  # -2.5%
+                    sig["take_profit"] = round(price * (1 + 0.020), 2) # +2.0%
+                else:
+                    sig["stop_loss"]   = round(price * (1 - 0.020), 2)  # -2.0%
+                    sig["take_profit"] = round(price * (1 + 0.015), 2) # +1.5%
+
+                # Respect UI min_conf setting — only applies in live mode now
                 if forced_conf < threshold:
-                    _skip(f"Heuristic conf {forced_conf}% < min threshold {threshold}%")
+                    logger.info(f"[HEURISTIC] Confidence {forced_conf} below min_conf {threshold}, skipping")
                     state.action_taken = "SKIP"; return state
-                sig["risk_reward"] = abs(sig["take_profit"] - mkt['price']) / max(abs(mkt['price'] - sig["stop_loss"]), 0.0001)
-                logger.info(f"[SNIPER] HEURISTIC ENTRY ({state.regime}): score={score:.0f} rsi={rsi:.0f} -> conf={forced_conf}%")
+
+                sig["risk_reward"] = abs(sig["take_profit"] - price) / max(abs(price - sig["stop_loss"]), 0.0001)
+                logger.info(f"[SNIPER] HEURISTIC ENTRY ({regime}): score={score:.0f} rsi={rsi:.0f} -> conf={forced_conf}%")
+                state.signal = sig
 
         action = sig.get("action", "HOLD")
         if action == "HOLD":
@@ -618,20 +645,19 @@ class GraphEngine:
             state.action_taken = "SKIP"; return state
 
         if sig.get("confidence", 0) < threshold and not forced_conf:
-            _skip(f"Conf {sig.get('confidence')}% < threshold {threshold}%")
-            state.action_taken = "SKIP"; return state
+            # Paper mode allows 60 floor, Live mode sticks to threshold
+            if is_paper and sig.get("confidence", 0) >= 60:
+                logger.info(f"[FLEX] Allowing confidence {sig.get('confidence')}% in paper mode")
+            else:
+                _skip(f"Conf {sig.get('confidence')}% < threshold {threshold}%")
+                state.action_taken = "SKIP"; return state
 
         # Task 2: MTF Gate — regime-aware threshold
-        # even forced entries MUST respect a minimum confluence gate
-        if state.regime == "bear":
-            mtf_threshold = 0.40
-        else:
-            # Paper mode allows 0.50 floor, Live mode sticks to 0.67
-            mtf_threshold = 0.50 if is_paper else float(cfg.get("mtf_min_confluence", 0.67))
-
-        if (cfg.get("use_multi_timeframe") and state.tf_confluence < mtf_threshold):
-            _skip(f"MTF {state.tf_confluence:.2f} < threshold {mtf_threshold:.2f}")
-            state.action_taken = "SKIP"; return state
+        if forced_conf is None and regime not in ("sideways",):
+            mtf_threshold = 0.25 if is_paper else float(cfg.get("mtf_min_confluence", 0.67))
+            if (cfg.get("use_multi_timeframe") and state.tf_confluence < mtf_threshold):
+                _skip(f"MTF {state.tf_confluence:.2f} < threshold {mtf_threshold:.2f}")
+                state.action_taken = "SKIP"; return state
 
         if any(m.sym == mkt["sym"] for m in port.missions.values()):
             _skip(f"Already holding {mkt['sym']}")
@@ -642,8 +668,10 @@ class GraphEngine:
             state.action_taken = "SKIP"; return state
 
         # ── RSI Overtapped Check ──
-        if rsi > 75 and action == "BUY":
-            _skip(f"RSI {rsi:.0f} > 75 (Overbought)")
+        # Paper mode allows 85 floor (momentum), Live mode sticks to 75 (safety)
+        rsi_limit = 85 if is_paper else 75
+        if rsi > rsi_limit and action == "BUY":
+            _skip(f"RSI {rsi:.0f} > {rsi_limit} (Overbought)")
             state.action_taken = "SKIP"; return state
         if rsi < 25 and action == "SELL":
             _skip(f"RSI {rsi:.0f} < 25 (Oversold)")
@@ -663,25 +691,28 @@ class GraphEngine:
             state.action_taken = "SIGNAL"; return state
 
         # ── RISK-ADJUSTED POSITION SIZING (Loss Tolerance) ────────
-        # Goal: Deploy maximum available capital while capping loss at `risk`%
+        # frac = fraction of total capital to risk per trade (e.g. 0.02 = 2%)
+        # Configurable via UI/config key "risk_pct"; defaults to 2%
+        frac = float(cfg.get("risk_pct", 0.02))
+
+        # Goal: Deploy enough that hitting the stop costs exactly frac% of total capital
         price = mkt["price"]
         sl_initial = float(sig.get("stop_loss", price * 0.98))
         stop_distance = abs(price - sl_initial)
-        stop_pct = max(stop_distance / max(price, 0.0001), 0.005) # floor 0.5% stop
+        stop_pct = max(stop_distance / max(price, 0.0001), 0.005)  # floor 0.5% stop
 
-        # We deploy enough that hitting the stop costs us exactly `frac`% of TOTAL wallet
         # Total capital = port.capital, Available = port.available_capital
-        max_deploy = port.available_capital * 0.40 # Capped at 40% per trade (User request)
+        max_deploy = port.available_capital * 0.40  # Capped at 40% per trade
         risk_adjusted = (port.capital * frac) / stop_pct
-        
+
         # Deploy min of risk-adjusted theoretical or 40% of available cash
         final_value = min(max_deploy, risk_adjusted)
         qty = max(1, int(final_value / max(price, 0.0001)))
 
         logger.info(
             f"[SIZER] Wallet=₹{port.capital:.0f} | Avail=₹{port.available_capital:.0f} | "
-            f"RiskTarget=₹{port.capital * frac:.0f} | Stop={stop_pct:.2%} | "
-            f"Deploy=₹{final_value:.0f} | Qty={qty}"
+            f"RiskFrac={frac:.1%} | RiskTarget=₹{port.capital * frac:.0f} | "
+            f"Stop={stop_pct:.2%} | Deploy=₹{final_value:.0f} | Qty={qty}"
         )
 
         # ── VATS trailing stop (ONLY formula — NO hardcoded %) ────
@@ -718,7 +749,7 @@ class GraphEngine:
             stop_loss=sl,
             take_profit=tp,
             trailing_stop=trailing,
-            regime_at_entry=cycle_regime,
+            regime_at_entry=regime,  # captured at top of _node_execute
             exchange=mkt.get("exchange", "NSE"),
             asset_type=mkt.get("asset", "equity"),
             atr_at_entry=atr,

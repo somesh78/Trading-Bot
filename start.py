@@ -50,6 +50,40 @@ def main():
         check=True,
     )
 
+    # FIX 1: OpenRouter API Validation
+    print("[*] Validating OpenRouter API Key...")
+    import httpx
+    import json
+    try:
+        or_key = None
+        with open(os.path.join("backend", ".env"), "r") as f:
+            for line in f:
+                if line.startswith("OPENROUTER_KEY="):
+                    or_key = line.split("=", 1)[1].strip()
+                    break
+        
+        if not or_key:
+            # Fallback to GROQ_KEY as many users use it interchangeably for OR models
+            with open(os.path.join("backend", ".env"), "r") as f:
+                f.seek(0)
+                for line in f:
+                    if line.startswith("GROQ_KEY="):
+                        or_key = line.split("=", 1)[1].strip()
+                        break
+        
+        if or_key:
+            headers = {"Authorization": f"Bearer {or_key}", "Content-Type": "application/json"}
+            r = httpx.get("https://openrouter.ai/api/v1/models", headers=headers, timeout=10.0)
+            if r.status_code == 401:
+                print(f"\n  [FATAL] OPENROUTER_KEY is invalid or expired.")
+                print("  Get a new key from https://openrouter.ai/keys and update your .env file.")
+                sys.exit(1)
+            print("  [OK] API Key validated.")
+        else:
+            print("  [WARNING] No OPENROUTER_KEY found in .env — skipping validation.")
+    except Exception as e:
+        print(f"  [WARNING] Registry validation skipped: {e}")
+
     # Start backend
     print("[*] Starting Backend (FastAPI + GraphEngine)...")
     be_cmd = [

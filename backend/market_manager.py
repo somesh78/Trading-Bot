@@ -131,17 +131,37 @@ def is_high_conviction(quote: Dict, min_score: float = 5.0) -> bool:
 # =====================================================================
 
 # Top liquid crypto tickers on Yahoo Finance
+# In your CRYPTO_UNIVERSE list, expand to include these symbols:
 CRYPTO_UNIVERSE = [
-    "BTC-USD", "ETH-USD", "SOL-USD", "BNB-USD", "XRP-USD",
-    "DOGE-USD", "ADA-USD", "AVAX-USD", "LINK-USD", "DOT-USD",
-    "SHIB-USD", "LTC-USD", "BCH-USD", "XLM-USD", "ALGO-USD",
-    "NEAR-USD", "MATIC-USD", "FTM-USD", "ATOM-USD", "OP-USD",
+    # Crypto (always available 24/7)
+    "BTC-USD", "ETH-USD", "BNB-USD", "SOL-USD", "XRP-USD",
+    "ADA-USD", "AVAX-USD", "DOGE-USD", "DOT-USD", "MATIC-USD",
+    "LINK-USD", "ATOM-USD", "ALGO-USD", "LTC-USD", "BCH-USD",
+    "SHIB-USD", "XLM-USD", "UNI-USD", "AAVE-USD", "FIL-USD",
 ]
 
-# Metals, Oils, and Agri-comm via yfinance
 COMMODITY_UNIVERSE = [
-    "CL=F", "GC=F", "SI=F", "HG=F", "NG=F", "PL=F", 
-    "ZC=F", "ZS=F", "ZW=F", "KC=F"
+    # Metals & Oil (via Yahoo Finance)
+    "GC=F",    # Gold futures
+    "SI=F",    # Silver futures  
+    "CL=F",    # Crude Oil WTI
+    "BZ=F",    # Brent Crude
+    "NG=F",    # Natural Gas
+    "HG=F",    # Copper
+    "PL=F",    # Platinum
+]
+
+US_STOCK_UNIVERSE = [
+    # High-volatility US stocks good for trading
+    "NVDA", "TSLA", "AMD", "AAPL", "MSFT", "META", "GOOGL",
+    "AMZN", "NFLX", "PLTR", "COIN", "MSTR", "RIOT", "MARA",
+]
+
+NSE_UNIVERSE = [
+    # Indian stocks via yfinance (append .NS)
+    "RELIANCE.NS", "TCS.NS", "HDFCBANK.NS", "INFY.NS", "ICICIBANK.NS",
+    "WIPRO.NS", "TATAMOTORS.NS", "BAJFINANCE.NS", "ADANIENT.NS", "SBIN.NS",
+    "HINDALCO.NS", "TATASTEEL.NS", "COALINDIA.NS", "ONGC.NS", "IOC.NS",
 ]
 
 
@@ -474,6 +494,8 @@ LSE_SEEDS = [
 US_SEEDS = [
     "AAPL", "MSFT", "NVDA", "GOOGL", "AMZN",
     "META", "TSLA", "AMD", "SMCI", "PLTR",
+    "COIN", "MARA", "RIOT", "UPST", "AFRM",
+    "SOFI", "HOOD", "PYPL", "SQ", "GME"
 ]
 
 
@@ -648,21 +670,6 @@ class GlobalScoutAgent:
             self._sector_perf = await self.alphav.get_sector_performance()
             self._last_sector_refresh = now
 
-    def _get_active_markets(self) -> List[str]:
-        """UTC-clock-based market routing (weekday only)."""
-        hour = datetime.now(timezone.utc).hour
-        active = []
-        schedule = {
-            "NSE":  (3,  10),
-            "LSE":  (8,  16),
-            "NYSE": (13, 20),
-            "FX":   (0,  23),
-        }
-        for mkt, (o, c) in schedule.items():
-            if o <= hour < c:
-                active.append(mkt)
-        return active or ["FX"]
-
     async def scan(
         self,
         n_candidates: int = 6,
@@ -670,117 +677,86 @@ class GlobalScoutAgent:
         primary_market: str = "AUTO",
     ) -> Tuple[List[Dict], str]:
         """
-        Perform a full global scan.
-        If primary_market is "NSE", it forces NSE scan regardless of hours.
-        Returns (ranked_candidates, primary_exchange).
+        Scan all universes based on market hours and return top scoring assets.
+        Ensures a non-empty pipeline 24/7.
         """
+        now_utc = datetime.now(timezone.utc)
+        hour = now_utc.hour
+        weekday = now_utc.weekday()
+        
         all_candidates: List[Dict] = []
         
-        # ── Weekend: Crypto universe ─────────────────────────
-        if self._is_weekend():
-            logger.info("[SCOUT] Weekend detected -> scanning Crypto universe")
-            crypto_picks = await self.crypto.scan_top_inplay(n_pick=15)
-            all_candidates.extend(crypto_picks)
-            
-            # Add commodities
-            comm_picks = await self.nse.scan_top_inplay(
-                seeds=COMMODITY_UNIVERSE, suffix="", 
-                n_seeds=10, n_pick=5, min_vol_ratio=0.5
+        # 1. Crypto is ALWAYS available 24/7
+        crypto_assets = await self.crypto.scan_top_inplay(n_pick=10)
+        all_candidates.extend(crypto_assets)
+        
+        # 2. US Equities (NYSE/NASDAQ)
+        if weekday < 5 and 13 <= hour < 20:
+            us_assets = await self.nse.scan_top_inplay(
+                seeds=US_STOCK_UNIVERSE, suffix="",
+                n_seeds=len(US_STOCK_UNIVERSE), n_pick=10, min_vol_ratio=0.8
             )
-            all_candidates.extend(comm_picks)
-            primary = "GLOBAL"
-
-        else:
-            # Weekday path
-            await self._refresh_sectors()
-            active = self._get_active_markets()
+            all_candidates.extend(us_assets)
             
-            # Manual Override
-            if primary_market != "AUTO":
-                active = [primary_market]
-                logger.debug(f"[SCOUT] Manual market override: {primary_market}")
+        # 3. Indian Equities (NSE)
+        if weekday < 5 and 3 <= hour < 10:
+            nse_assets = await self.nse.scan_top_inplay(
+                seeds=NSE_UNIVERSE, suffix="",
+                n_seeds=len(NSE_UNIVERSE), n_pick=10, min_vol_ratio=0.8
+            )
+            all_candidates.extend(nse_assets)
+            
+        # 4. Commodities (Futures) — fetched for scoring context but EXCLUDED from
+        #    the tradeable candidate list. yfinance only provides 1h data for =F tickers,
+        #    so 1m / 15m timeframes always return empty → MTF score = 0.33 every cycle,
+        #    which wastes the target slot. Re-enable once a proper futures MTF path exists.
+        # if weekday < 5:
+        #     comm_assets = await self.nse.scan_top_inplay(
+        #         seeds=COMMODITY_UNIVERSE, suffix="",
+        #         n_seeds=len(COMMODITY_UNIVERSE), n_pick=10, min_vol_ratio=0.5
+        #     )
+        #     all_candidates.extend(comm_assets)
 
-            primary = active[0] if active else "FX"
-
-            # NSE (Asia session)
-            if "NSE" in active:
-                nse_picks = await self.nse.scan_top_inplay(
-                    seeds=NSE_FNO_SEEDS, suffix=".NS",
-                    n_seeds=25, n_pick=5, min_vol_ratio=1.0
-                )
-                for q in nse_picks:
-                    q.setdefault("sector_avg_change",
-                                 self._sector_perf.get("Information Technology", 0))
-                all_candidates.extend(nse_picks)
-
-            # LSE (London session)
-            if "LSE" in active:
-                lse_picks = await self.nse.scan_top_inplay(
-                    seeds=LSE_SEEDS, suffix=".L",
-                    n_seeds=10, n_pick=3, min_vol_ratio=1.0
-                )
-                all_candidates.extend(lse_picks)
-
-            # NYSE via Finnhub
-            if "NYSE" in active and self.finnhub.api_key:
-                us_picks = await self.finnhub.get_top_movers(exchange="US", n=10)
-                for q in us_picks:
-                    score, _ = score_asset(q)
-                    q["_score"] = score
-                all_candidates.extend(us_picks)
-
-            # US Large-caps via yfinance
-            if "NYSE" in active and not self.finnhub.api_key:
-                us_yf_picks = await self.nse.scan_top_inplay(
-                    seeds=US_SEEDS, suffix="",
-                    n_seeds=10, n_pick=4, min_vol_ratio=1.0
-                )
-                all_candidates.extend(us_yf_picks)
-
-            # Forex
-            if "FX" in active and self.alphav.api_key:
-                for pair in [("EUR", "USD"), ("GBP", "USD"), ("USD", "INR")]:
-                    q = await self.alphav.get_forex_quote(*pair)
-                    if q:
-                        score, _ = score_asset(q)
-                        q["_score"] = score
-                        all_candidates.append(q)
-
-        # ── Apply conviction filter ───────────────────────────
-        filtered = [
-            a for a in all_candidates
-            if is_high_conviction(a, min_score=min_conviction)
-        ]
-
-        # Floor 1: If no conviction picks, take top-2 scorers
-        if not filtered and all_candidates:
-            logger.info("[SCOUT] No high-conviction picks -> using top scorers as floor")
-            filtered = sorted(
-                all_candidates,
-                key=lambda x: x.get("_score", 0), reverse=True
-            )[:3]
-
-        # Floor 2: If still empty (all APIs failed), trigger crypto fallback
-        if not filtered:
-            logger.warning("[SCOUT] All markets dry -> engaging crypto emergency fallback")
-            crypto_picks = await self.crypto.scan_top_inplay(n_pick=3)
-            for q in crypto_picks:
+        # Score and Sort
+        for q in all_candidates:
+            if "_score" not in q:
                 score, _ = score_asset(q)
                 q["_score"] = score
-            filtered = crypto_picks
-            primary  = "CRYPTO"
 
-        ranked = sorted(filtered, key=lambda x: x.get("_score", 0), reverse=True)
-        
-        status_msg = f"market={primary}"
-        if not all_candidates:
-            status_msg += " | ALL MARKETS DRY or CLOSED"
-        
+        # Exclude commodity futures — they always fail the 3-TF MTF gate (1h-only data)
+        FUTURES_TICKERS = {t.upper() for t in COMMODITY_UNIVERSE}
+        tradeable = [c for c in all_candidates if c.get("sym", "").upper() not in FUTURES_TICKERS
+                     and not c.get("sym", "").endswith("=F")]
+
+        tradeable.sort(key=lambda x: x.get("_score", 0), reverse=True)
+
+        # Filter by conviction
+        filtered = [c for c in tradeable if c.get("_score", 0) >= min_conviction]
+
+        # Guarantee at least 3 candidates even when only 1-2 pass the conviction bar.
+        # Score collapses (stale yfinance data, quiet markets) can leave a single asset
+        # passing, giving the MTF fallthrough loop no fallback. We always want >= 3
+        # options in the pipeline to maximise the chance of finding an enterable target.
+        if len(filtered) < 3 and tradeable:
+            seen = {c["sym"] for c in filtered}
+            extras = [c for c in tradeable if c["sym"] not in seen]
+            filtered = (filtered + extras)[:max(3, len(filtered))]
+
+        if not filtered:
+            # Absolute recovery fallback
+            crypto_rec = await self.crypto.scan_top_inplay(n_pick=3)
+            for q in crypto_rec:
+                score, _ = score_asset(q)
+                q["_score"] = score
+            filtered = crypto_rec
+
+        top = filtered[:n_candidates]
         logger.info(
-            f"[SCOUT] Attempted global scan -> {len(all_candidates)} candidates found -> "
-            f"{len(ranked)} in-play filtered | {status_msg}"
+            f"[SCOUT] Multi-universe scan -> {len(all_candidates)} found "
+            f"-> {len(tradeable)} tradeable (futures excluded) "
+            f"-> {len(top)} in-play filtered | market=GLOBAL"
         )
-        return ranked[:n_candidates], primary
+        return top, "GLOBAL"
 
     async def get_sector_leaders(self) -> Dict[str, float]:
         await self._refresh_sectors()
