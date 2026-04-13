@@ -1,0 +1,11 @@
+fastapi
+uvicorn[standard]
+pydantic
+httpx
+python-dotenv
+python-multipart
+websockets
+yfinance
+pandas
+psutil
+urllib3<2.0

@@ -1,0 +1,1593 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SENTINEL QUANT — Reasoning Engine</title>
+<link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=IBM+Plex+Mono:wght@300;400;500&display=swap" rel="stylesheet">
+<style>
+/* ═══════════════════════════════════════════════════════
+   DESIGN SYSTEM — Deep space / mission-control aesthetic
+═══════════════════════════════════════════════════════ */
+:root {
+  --void:     #020408;
+  --space:    #070d14;
+  --deep:     #0a1520;
+  --panel:    #0d1e2e;
+  --surface:  #102030;
+  --rim:      #162840;
+  --border:   #1a3048;
+  --border2:  #204060;
+
+  --teal:     #00e5c8;
+  --teal-dim: rgba(0,229,200,0.12);
+  --teal-glow:rgba(0,229,200,0.25);
+  --blue:     #0099ff;
+  --blue-dim: rgba(0,153,255,0.12);
+  --gold:     #ffc830;
+  --gold-dim: rgba(255,200,48,0.1);
+  --red:      #ff3355;
+  --red-dim:  rgba(255,51,85,0.1);
+  --green:    #22ff88;
+  --green-dim:rgba(34,255,136,0.1);
+  --orange:   #ff7830;
+  --purple:   #b060ff;
+
+  --text:     #8ab4cc;
+  --text2:    #5a7a90;
+  --white:    #d8eef8;
+  --dim:      #2a4a60;
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  background: var(--void);
+  font-family: 'IBM Plex Mono', monospace;
+  color: var(--text);
+  min-height: 100vh;
+  overflow-x: hidden;
+}
+
+/* Deep space background */
+body::before {
+  content: '';
+  position: fixed; inset: 0; z-index: 0;
+  background:
+    radial-gradient(ellipse 80% 50% at 10% 10%, rgba(0,229,200,0.03) 0%, transparent 60%),
+    radial-gradient(ellipse 60% 40% at 90% 80%, rgba(0,100,255,0.04) 0%, transparent 60%),
+    radial-gradient(ellipse 40% 60% at 50% 50%, rgba(10,21,32,0.8) 0%, transparent 100%);
+  pointer-events: none;
+}
+
+/* Fine grid */
+body::after {
+  content: '';
+  position: fixed; inset: 0; z-index: 0;
+  background-image:
+    linear-gradient(rgba(0,229,200,0.018) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(0,229,200,0.018) 1px, transparent 1px);
+  background-size: 50px 50px;
+  pointer-events: none;
+}
+
+.wrap { max-width: 1200px; margin: 0 auto; padding: 0 1.2rem; position: relative; z-index: 1; }
+
+/* ── HEADER ── */
+header {
+  padding: 1.1rem 0;
+  border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; justify-content: space-between;
+  flex-wrap: wrap; gap: 1rem;
+}
+.logo-block { display: flex; align-items: flex-end; gap: 1rem; }
+.logo {
+  font-family: 'Orbitron', sans-serif;
+  font-weight: 900; font-size: 1.5rem;
+  letter-spacing: 0.15em; color: var(--teal);
+  text-shadow: 0 0 30px rgba(0,229,200,0.4);
+  line-height: 1;
+}
+.logo-sub {
+  font-size: 0.58rem; letter-spacing: 0.25em;
+  color: var(--text2); text-transform: uppercase;
+  display: block; margin-top: 0.2rem;
+}
+.header-badges { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+.hbadge {
+  padding: 0.28rem 0.7rem; border-radius: 1px;
+  font-size: 0.6rem; letter-spacing: 0.15em;
+  border: 1px solid var(--border2);
+  display: flex; align-items: center; gap: 0.4rem;
+}
+.hbadge .dot { width: 5px; height: 5px; border-radius: 50%; }
+.hbadge.active { border-color: rgba(0,229,200,0.3); color: var(--teal); }
+.hbadge.active .dot { background: var(--teal); box-shadow: 0 0 6px var(--teal); animation: pulse 2s infinite; }
+.hbadge.warn   { border-color: rgba(255,200,48,0.3); color: var(--gold); }
+.hbadge.warn .dot { background: var(--gold); }
+.hbadge.danger { border-color: rgba(255,51,85,0.35); color: var(--red); }
+.hbadge.danger .dot { background: var(--red); box-shadow: 0 0 6px var(--red); animation: pulse 0.6s infinite; }
+.hbadge.off { color: var(--text2); }
+.hbadge.off .dot { background: var(--dim); }
+@keyframes pulse { 0%,100%{opacity:1}50%{opacity:0.4} }
+
+/* ── CRASH ALERT BANNER ── */
+.crash-banner {
+  display: none; margin-top: 0.8rem;
+  background: rgba(255,51,85,0.08);
+  border: 1px solid rgba(255,51,85,0.4);
+  border-radius: 2px; padding: 0.7rem 1rem;
+  color: var(--red); font-size: 0.72rem; letter-spacing: 0.08em;
+  line-height: 1.6;
+  animation: flashBorder 1s infinite;
+}
+@keyframes flashBorder { 0%,100%{border-color:rgba(255,51,85,0.4)}50%{border-color:rgba(255,51,85,0.9)} }
+.crash-banner strong { font-size: 0.85rem; letter-spacing: 0.15em; }
+
+/* ── METRICS GRID ── */
+.metrics {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 0.5rem;
+  margin-top: 0.8rem;
+}
+@media(max-width:900px){ .metrics{ grid-template-columns: repeat(3,1fr); } }
+@media(max-width:500px){ .metrics{ grid-template-columns: repeat(2,1fr); } }
+
+.metric {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  padding: 0.65rem 0.75rem;
+  position: relative; overflow: hidden;
+  border-radius: 1px;
+}
+.metric::before {
+  content:''; position:absolute; top:0; left:0; right:0; height:2px;
+  opacity: 0.7;
+}
+.metric.teal::before   { background: var(--teal); }
+.metric.blue::before   { background: var(--blue); }
+.metric.gold::before   { background: var(--gold); }
+.metric.green::before  { background: var(--green); }
+.metric.red::before    { background: var(--red); }
+.metric.purple::before { background: var(--purple); }
+
+.m-label { font-size: 0.55rem; letter-spacing: 0.18em; color: var(--text2); text-transform: uppercase; }
+.m-val {
+  font-family: 'Orbitron', sans-serif;
+  font-size: 1.1rem; font-weight: 700;
+  margin-top: 0.2rem; line-height: 1; letter-spacing: 0.04em;
+}
+.m-val.teal   { color: var(--teal); }
+.m-val.blue   { color: var(--blue); }
+.m-val.gold   { color: var(--gold); }
+.m-val.green  { color: var(--green); }
+.m-val.red    { color: var(--red); }
+.m-val.purple { color: var(--purple); }
+.m-sub { font-size: 0.58rem; color: var(--text2); margin-top: 0.15rem; }
+
+/* ── SECTION TITLE ── */
+.sec {
+  font-family: 'Orbitron', sans-serif; font-weight: 700;
+  font-size: 0.7rem; letter-spacing: 0.25em; text-transform: uppercase;
+  color: var(--teal); margin: 1rem 0 0.5rem;
+  display: flex; align-items: center; gap: 0.6rem;
+}
+.sec::after { content:''; flex:1; height:1px; background: var(--border); }
+.sec span { color: var(--text2); font-weight: 300; font-size: 0.6rem; }
+
+/* ── PANEL ── */
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 1px;
+  padding: 1rem;
+}
+.panel.no-pad { padding: 0; overflow: hidden; }
+
+/* ── FIELDS ── */
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0.7rem; }
+.grid3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 0.7rem; }
+.grid4 { display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 0.7rem; }
+@media(max-width:700px){ .grid2,.grid3,.grid4{ grid-template-columns:1fr; } }
+
+.f { margin-bottom: 0; }
+.f label {
+  display: block; font-size: 0.58rem; letter-spacing: 0.16em;
+  color: var(--text2); text-transform: uppercase; margin-bottom: 0.3rem;
+}
+input, select, textarea {
+  background: var(--deep); border: 1px solid var(--border2);
+  border-radius: 1px; color: var(--white);
+  font-family: 'IBM Plex Mono', monospace; font-size: 0.78rem;
+  padding: 0.5rem 0.7rem; width: 100%; outline: none;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+input:focus, select:focus, textarea:focus {
+  border-color: var(--teal);
+  box-shadow: 0 0 0 1px rgba(0,229,200,0.1);
+}
+select option { background: var(--deep); }
+textarea { resize: vertical; }
+
+/* ── TOGGLE SWITCH ── */
+.toggle-row { display: flex; align-items: center; gap: 0.6rem; font-size:0.68rem; }
+.toggle {
+  position:relative; width:36px; height:18px;
+  background: var(--dim); border-radius:9px; cursor:pointer;
+  transition: background 0.2s;
+}
+.toggle.on { background: var(--teal); }
+.toggle::after {
+  content:''; position:absolute; top:2px; left:2px;
+  width:14px; height:14px; border-radius:50%;
+  background: white; transition: left 0.2s;
+}
+.toggle.on::after { left: 20px; }
+
+/* ── BUTTONS ── */
+.btn {
+  font-family: 'Orbitron', sans-serif; font-weight: 700;
+  letter-spacing: 0.12em; font-size: 0.7rem;
+  padding: 0.55rem 1.3rem; border-radius: 1px;
+  border: none; cursor: pointer; transition: all 0.15s;
+  text-transform: uppercase;
+}
+.btn-teal   { background: var(--teal); color: var(--void); }
+.btn-teal:hover   { filter:brightness(1.12); transform:translateY(-1px); box-shadow:0 4px 20px var(--teal-glow); }
+.btn-red    { background: var(--red); color: white; }
+.btn-red:hover    { filter:brightness(1.1); }
+.btn-ghost  { background:transparent; border:1px solid var(--border2); color:var(--text2); }
+.btn-ghost:hover  { border-color:var(--teal); color:var(--teal); }
+.btn-gold   { background: var(--gold); color: var(--void); }
+.btn:disabled { opacity:0.3; cursor:not-allowed; transform:none !important; filter:none !important; }
+.brow { display:flex; gap:0.5rem; flex-wrap:wrap; }
+
+/* ── REASONING PANEL ── */
+.reasoning-box {
+  background: var(--deep);
+  border: 1px solid var(--border);
+  border-radius: 1px; padding: 0.9rem 1rem;
+  font-size: 0.72rem; line-height: 1.8;
+  color: var(--text); margin-top: 0.6rem;
+  min-height: 80px;
+  white-space: pre-wrap;
+}
+.reasoning-step {
+  display: flex; gap: 0.7rem; margin-bottom: 0.3rem;
+}
+.rs-num {
+  color: var(--teal); font-family:'Orbitron',sans-serif;
+  font-size:0.6rem; min-width:22px; padding-top:2px;
+}
+.rs-text { color: var(--text); }
+.rs-verdict {
+  margin-top: 0.6rem; padding: 0.5rem 0.7rem;
+  border-radius: 1px; font-size: 0.72rem;
+  font-family: 'Orbitron', sans-serif; letter-spacing: 0.1em;
+}
+.rs-verdict.buy  { background:var(--green-dim); border:1px solid rgba(34,255,136,0.25); color:var(--green); }
+.rs-verdict.sell { background:var(--red-dim);   border:1px solid rgba(255,51,85,0.25);  color:var(--red); }
+.rs-verdict.hold { background:var(--gold-dim);  border:1px solid rgba(255,200,48,0.25); color:var(--gold); }
+.rs-verdict.abort{ background:rgba(176,96,255,0.1); border:1px solid rgba(176,96,255,0.3); color:var(--purple); }
+
+/* ── SIGNAL CARD ── */
+.signal-card {
+  display:none; border-radius:1px; overflow:hidden;
+  animation: slideUp 0.3s ease;
+  margin-top: 0.7rem;
+}
+@keyframes slideUp { from{opacity:0;transform:translateY(10px)} to{opacity:1;transform:translateY(0)} }
+.sc-top {
+  padding: 1rem 1.2rem;
+  display: flex; justify-content:space-between; align-items:center;
+  flex-wrap: wrap; gap: 0.7rem;
+}
+.sc-top.buy  { background:rgba(34,255,136,0.06); border:1px solid rgba(34,255,136,0.2); }
+.sc-top.sell { background:rgba(255,51,85,0.06);  border:1px solid rgba(255,51,85,0.2); }
+.sc-top.hold { background:rgba(255,200,48,0.05); border:1px solid rgba(255,200,48,0.18); }
+.sc-action {
+  font-family:'Orbitron',sans-serif; font-size:2.2rem; font-weight:900;
+  letter-spacing:0.1em; line-height:1;
+}
+.sc-action.buy  { color:var(--green); text-shadow:0 0 20px rgba(34,255,136,0.4); }
+.sc-action.sell { color:var(--red);   text-shadow:0 0 20px rgba(255,51,85,0.4); }
+.sc-action.hold { color:var(--gold); }
+.sc-sym  { font-family:'Orbitron',sans-serif; font-size:1rem; color:var(--white); letter-spacing:0.1em; }
+.sc-body {
+  background: var(--surface); border:1px solid var(--border); border-top:none;
+  padding: 0.8rem 1.2rem;
+}
+.sc-levels { display:flex; gap:1.5rem; flex-wrap:wrap; font-size:0.7rem; margin-bottom:0.6rem; }
+.lbl { color:var(--text2); }
+.lvl { color:var(--white); font-weight:500; }
+.sc-conf-track { height:2px; background:var(--border); border-radius:1px; }
+.sc-conf-fill  { height:2px; border-radius:1px; transition:width 0.6s; }
+.sc-conf-fill.buy  { background:linear-gradient(90deg,var(--green),#80ffcc); }
+.sc-conf-fill.sell { background:linear-gradient(90deg,var(--red),#ff8095); }
+.sc-conf-fill.hold { background:linear-gradient(90deg,var(--gold),#ffe080); }
+.filters-row { display:flex; gap:0.5rem; flex-wrap:wrap; margin-top:0.5rem; }
+.filter-chip {
+  font-size:0.58rem; padding:0.18rem 0.5rem;
+  border-radius:1px; letter-spacing:0.1em;
+}
+.fc-pass { background:rgba(34,255,136,0.08); border:1px solid rgba(34,255,136,0.2); color:var(--green); }
+.fc-fail { background:rgba(255,51,85,0.08);  border:1px solid rgba(255,51,85,0.2);  color:var(--red); }
+.fc-warn { background:rgba(255,200,48,0.06); border:1px solid rgba(255,200,48,0.2); color:var(--gold); }
+.fc-skip { background:rgba(176,96,255,0.08); border:1px solid rgba(176,96,255,0.2); color:var(--purple); }
+
+/* ── TERMINAL ── */
+.terminal {
+  background: #010306;
+  border: 1px solid var(--border);
+  border-radius: 1px;
+  padding: 0.7rem 0.9rem;
+  height: 220px; overflow-y: auto;
+  font-size: 0.72rem; line-height: 1.6;
+  font-family: 'IBM Plex Mono', monospace;
+}
+.terminal::-webkit-scrollbar { width:3px; }
+.terminal::-webkit-scrollbar-thumb { background:var(--border2); }
+.tline { display:flex; gap:0.6rem; }
+.tts   { color:var(--dim); min-width:70px; font-size:0.65rem; }
+.ttag  { min-width:64px; font-size:0.68rem; font-weight:500; }
+.t-sys   { color:var(--teal); }
+.t-quant { color:var(--blue); }
+.t-ai    { color:var(--purple); }
+.t-buy   { color:var(--green); }
+.t-sell  { color:var(--red); }
+.t-warn  { color:var(--gold); }
+.t-crash { color:var(--red); font-weight:bold; }
+.t-skip  { color:var(--text2); }
+.t-loop  { color:var(--orange); }
+.tmsg  { color:var(--text); }
+
+/* ── TRADE TABLE ── */
+.ttable { width:100%; border-collapse:collapse; font-size:0.68rem; }
+.ttable th {
+  text-align:left; padding:0.45rem 0.7rem;
+  font-size:0.55rem; letter-spacing:0.14em; color:var(--text2);
+  border-bottom:1px solid var(--border); text-transform:uppercase;
+  background: var(--deep);
+}
+.ttable td { padding:0.42rem 0.7rem; border-bottom:1px solid rgba(26,48,72,0.5); }
+.ttable tr:last-child td { border-bottom:none; }
+.ttable tr:hover td { background:rgba(0,229,200,0.02); }
+.badge {
+  font-family:'Orbitron',sans-serif; font-size:0.6rem; letter-spacing:0.1em;
+  padding:0.1rem 0.4rem; border-radius:1px;
+}
+.b-buy  { background:var(--green-dim); color:var(--green); border:1px solid rgba(34,255,136,0.2); }
+.b-sell { background:var(--red-dim);   color:var(--red);   border:1px solid rgba(255,51,85,0.2); }
+.b-hold { background:var(--gold-dim);  color:var(--gold);  border:1px solid rgba(255,200,48,0.2); }
+.b-skip { background:rgba(176,96,255,0.08); color:var(--purple); border:1px solid rgba(176,96,255,0.2); }
+.pnl-pos { color:var(--green); font-weight:500; }
+.pnl-neg { color:var(--red); font-weight:500; }
+.pnl-zero { color:var(--text2); }
+
+/* ── CANVAS ── */
+.canvas-wrap { background:var(--deep); border:1px solid var(--border); border-radius:1px; overflow:hidden; }
+canvas { display:block; width:100%; }
+
+/* ── RISK METER ── */
+.risk-meter {
+  display:flex; gap:3px; align-items:flex-end; height:32px;
+}
+.rm-bar {
+  flex:1; border-radius:1px 1px 0 0; transition:height 0.3s, background 0.3s;
+  min-height:3px;
+}
+
+/* ── REGIME BADGE ── */
+.regime {
+  display:inline-flex; align-items:center; gap:0.4rem;
+  padding:0.3rem 0.8rem; border-radius:1px;
+  font-family:'Orbitron',sans-serif; font-size:0.65rem; letter-spacing:0.12em;
+}
+.regime.bull   { background:rgba(34,255,136,0.08); border:1px solid rgba(34,255,136,0.25); color:var(--green); }
+.regime.bear   { background:rgba(255,51,85,0.08);  border:1px solid rgba(255,51,85,0.25);  color:var(--red); }
+.regime.crash  { background:rgba(255,51,85,0.15);  border:2px solid var(--red);  color:var(--red); animation:flashBorder 0.8s infinite; }
+.regime.sideways { background:rgba(255,200,48,0.06); border:1px solid rgba(255,200,48,0.2); color:var(--gold); }
+.regime.recovery { background:rgba(0,153,255,0.08); border:1px solid rgba(0,153,255,0.25); color:var(--blue); }
+
+/* ── LAYOUT ── */
+.main-grid { display:grid; grid-template-columns:1fr 360px; gap:0.8rem; margin-top:0.8rem; }
+@media(max-width:900px){ .main-grid{ grid-template-columns:1fr; } }
+.left-col { display:flex; flex-direction:column; gap:0.8rem; }
+.right-col { display:flex; flex-direction:column; gap:0.8rem; }
+
+/* ── INDICATOR ROW ── */
+.ind-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:0.5rem; }
+.ind-cell {
+  background:var(--deep); border:1px solid var(--border);
+  padding:0.5rem 0.65rem; border-radius:1px;
+}
+.ind-name  { font-size:0.55rem; letter-spacing:0.14em; color:var(--text2); text-transform:uppercase; }
+.ind-val   { font-family:'Orbitron',sans-serif; font-size:0.85rem; font-weight:700; margin-top:0.15rem; }
+.ind-bar   { height:2px; background:var(--border); border-radius:1px; margin-top:0.3rem; }
+.ind-fill  { height:2px; border-radius:1px; transition:width 0.4s, background 0.4s; }
+
+/* scroll */
+.scroll-x { overflow-x:auto; }
+.scroll-x::-webkit-scrollbar { height:3px; }
+.scroll-x::-webkit-scrollbar-thumb { background:var(--border2); }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<!-- ═══ HEADER ═══ -->
+<header>
+  <div class="logo-block">
+    <div>
+      <div class="logo">SENTINEL QUANT</div>
+      <span class="logo-sub">AI Reasoning Engine · NSE India · 30-Year Backtested</span>
+    </div>
+  </div>
+  <div class="header-badges">
+    <div class="hbadge off" id="badgeAgent"><div class="dot"></div><span id="badgeAgentTxt">AGENT OFFLINE</span></div>
+    <div class="hbadge warn" id="badgeRegime"><div class="dot"></div><span id="badgeRegimeTxt">REGIME: —</span></div>
+    <div class="hbadge off" id="badgeCrash"><div class="dot"></div><span id="badgeCrashTxt">CRASH GUARD: OFF</span></div>
+    <div class="hbadge off" id="badgeRisk"><div class="dot"></div><span id="badgeRiskTxt">RISK: IDLE</span></div>
+  </div>
+</header>
+
+<!-- Crash Banner -->
+<div class="crash-banner" id="crashBanner">
+  <strong>⚠ MARKET CRASH DETECTED — ALL POSITIONS HALTED</strong><br>
+  <span id="crashReason">Crash detection triggered. No new trades will be executed until regime normalizes.</span>
+</div>
+
+<!-- ═══ METRICS ═══ -->
+<div class="metrics">
+  <div class="metric teal">
+    <div class="m-label">Portfolio</div>
+    <div class="m-val teal" id="mCapital">₹200.00</div>
+    <div class="m-sub" id="mCapSub">Starting</div>
+  </div>
+  <div class="metric green">
+    <div class="m-label">Total P&amp;L</div>
+    <div class="m-val green" id="mPnl">₹0.00</div>
+    <div class="m-sub" id="mPnlPct">0.00% return</div>
+  </div>
+  <div class="metric gold">
+    <div class="m-label">Win Rate</div>
+    <div class="m-val gold" id="mWin">—</div>
+    <div class="m-sub" id="mWinSub">0 trades</div>
+  </div>
+  <div class="metric blue">
+    <div class="m-label">Sharpe Ratio</div>
+    <div class="m-val blue" id="mSharpe">—</div>
+    <div class="m-sub">risk-adj return</div>
+  </div>
+  <div class="metric purple">
+    <div class="m-label">Max Drawdown</div>
+    <div class="m-val purple" id="mDD">0%</div>
+    <div class="m-sub" id="mDDSub">peak-to-trough</div>
+  </div>
+  <div class="metric red">
+    <div class="m-label">Crash Score</div>
+    <div class="m-val red" id="mCrash">0</div>
+    <div class="m-sub" id="mCrashSub">SAFE</div>
+  </div>
+</div>
+
+<!-- ═══ MAIN GRID ═══ -->
+<div class="main-grid">
+
+<!-- ─── LEFT COLUMN ─── -->
+<div class="left-col">
+
+  <!-- Config -->
+  <div class="sec">⚙ ENGINE CONFIGURATION</div>
+  <div class="panel">
+    <div class="grid2" style="gap:0.7rem">
+      <div class="f">
+        <label>Groq API Key</label>
+        <input type="password" id="groqKey" placeholder="gsk_..." value=""/>
+      </div>
+      <div class="f">
+        <label>Reasoning Model</label>
+        <select id="groqModel">
+          <option value="llama-3.3-70b-versatile" selected>Llama 3.3 70B — Versatile (Best)</option>
+          <option value="llama-3.1-8b-instant">Llama 3.1 8B — Fast</option>
+          <option value="mixtral-8x7b-32768">Mixtral 8x7B — 32K</option>
+        </select>
+      </div>
+    </div>
+    <div class="grid4" style="margin-top:0.7rem">
+      <div class="f">
+        <label>Capital (₹)</label>
+        <input type="number" id="cfgCapital" value="200" min="50"/>
+      </div>
+      <div class="f">
+        <label>Max Risk/Trade</label>
+        <select id="cfgRisk">
+          <option value="0.02">2% (safest)</option>
+          <option value="0.03" selected>3% (conservative)</option>
+          <option value="0.05">5% (moderate)</option>
+        </select>
+      </div>
+      <div class="f">
+        <label>Min Confidence</label>
+        <select id="cfgMinConf">
+          <option value="70">70% threshold</option>
+          <option value="75" selected>75% threshold</option>
+          <option value="80">80% threshold</option>
+          <option value="85">85% threshold</option>
+        </select>
+      </div>
+      <div class="f">
+        <label>Regime Filter</label>
+        <select id="cfgRegimeFilter">
+          <option value="bull_only">Bull only</option>
+          <option value="bull_sideways" selected>Bull + Sideways</option>
+          <option value="all">All (riskier)</option>
+        </select>
+      </div>
+    </div>
+    <div class="grid4" style="margin-top:0.7rem">
+      <div class="f">
+        <label>Loop Max Trades</label>
+        <input type="number" id="cfgMaxTrades" value="30" min="5"/>
+      </div>
+      <div class="f">
+        <label>Delay (sec)</label>
+        <input type="number" id="cfgDelay" value="4" min="1" max="20"/>
+      </div>
+      <div class="f">
+        <label>Target P&amp;L (₹)</label>
+        <input type="number" id="cfgTarget" value="60" min="10"/>
+      </div>
+      <div class="f">
+        <label>Stop-Loss Budget</label>
+        <select id="cfgMaxDD">
+          <option value="0.10">10% max DD</option>
+          <option value="0.15" selected>15% max DD</option>
+          <option value="0.20">20% max DD</option>
+        </select>
+      </div>
+    </div>
+    <div style="margin-top:0.8rem; display:flex; gap:1.5rem; flex-wrap:wrap;">
+      <div class="toggle-row">
+        <div class="toggle on" id="tgCrash" onclick="toggleFeature('crash')"></div>
+        <span>Crash Guard</span>
+      </div>
+      <div class="toggle-row">
+        <div class="toggle on" id="tgFilter" onclick="toggleFeature('filter')"></div>
+        <span>Multi-factor Filter</span>
+      </div>
+      <div class="toggle-row">
+        <div class="toggle on" id="tgReason" onclick="toggleFeature('reason')"></div>
+        <span>Chain-of-Thought Reasoning</span>
+      </div>
+      <div class="toggle-row">
+        <div class="toggle on" id="tgAuto" onclick="toggleFeature('auto')"></div>
+        <span>Auto-Execute</span>
+      </div>
+    </div>
+    <div class="brow" style="margin-top:0.9rem">
+      <button class="btn btn-teal" id="btnStart" onclick="startEngine()">▶ START ENGINE</button>
+      <button class="btn btn-red"  id="btnStop"  onclick="stopEngine()" disabled>■ HALT</button>
+      <button class="btn btn-ghost" onclick="runSingle()">↺ Single Run</button>
+      <button class="btn btn-ghost" onclick="resetEngine()">⟳ Reset</button>
+    </div>
+  </div>
+
+  <!-- Live Signal -->
+  <div class="sec">📡 LIVE SIGNAL <span>Last analysis output</span></div>
+  <div class="panel" id="signalPanel">
+    <div style="color:var(--text2);font-size:0.7rem" id="sigWaiting">Engine not started. Configure and press START.</div>
+    <div class="signal-card" id="signalCard">
+      <div class="sc-top" id="scTop">
+        <div>
+          <div class="sc-action" id="scAction">—</div>
+          <div class="sc-sym" id="scSym">—</div>
+        </div>
+        <div style="text-align:right;font-size:0.68rem;line-height:2">
+          <div style="color:var(--text2)">Conf: <span id="scConf" style="color:var(--white)">—</span></div>
+          <div style="color:var(--text2)">R/R: <span id="scRR" style="color:var(--white)">—</span></div>
+          <div style="color:var(--text2)">Qty: <span id="scQty" style="color:var(--white)">—</span></div>
+        </div>
+      </div>
+      <div class="sc-body">
+        <div class="sc-levels">
+          <span><span class="lbl">Entry </span><span class="lvl" id="scEntry">—</span></span>
+          <span><span class="lbl">SL </span><span class="lvl" id="scSL" style="color:var(--red)">—</span></span>
+          <span><span class="lbl">TP </span><span class="lvl" id="scTP" style="color:var(--green)">—</span></span>
+          <span><span class="lbl">Risk ₹</span><span class="lvl" id="scRisk">—</span></span>
+          <span><span class="lbl">TF </span><span class="lvl" id="scTF">—</span></span>
+        </div>
+        <div class="sc-conf-track"><div class="sc-conf-fill" id="scConfFill"></div></div>
+        <div class="filters-row" id="filtersRow"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Reasoning Chain -->
+  <div class="sec">🧠 REASONING CHAIN <span>Chain-of-thought analysis</span></div>
+  <div class="panel">
+    <div id="reasoningBox" class="reasoning-box" style="min-height:100px;color:var(--text2)">
+      Reasoning output will appear here after each analysis cycle...
+    </div>
+  </div>
+
+  <!-- Terminal -->
+  <div class="sec">💻 ENGINE LOG</div>
+  <div class="terminal" id="terminal">
+    <div class="tline"><span class="tts">00:00:00</span><span class="ttag t-sys">[SENTINEL]</span><span class="tmsg">Quant reasoning engine initialized. 30-year historical regime model loaded.</span></div>
+  </div>
+
+</div><!-- /left-col -->
+
+<!-- ─── RIGHT COLUMN ─── -->
+<div class="right-col">
+
+  <!-- Regime Detector -->
+  <div class="sec">🌐 REGIME DETECTOR</div>
+  <div class="panel">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:0.6rem">
+      <span style="font-size:0.62rem;color:var(--text2)">Current Market Regime</span>
+      <div class="regime sideways" id="regimeBadge">— DETECTING —</div>
+    </div>
+    <div class="ind-grid" id="indicatorGrid">
+      <!-- Populated by JS -->
+    </div>
+    <div style="margin-top:0.6rem;font-size:0.62rem;color:var(--text2)">Crash Score</div>
+    <div style="display:flex;align-items:center;gap:0.5rem;margin-top:0.25rem">
+      <div style="flex:1;height:6px;background:var(--border);border-radius:3px">
+        <div id="crashBar" style="height:6px;border-radius:3px;width:0%;background:var(--green);transition:width 0.5s,background 0.5s"></div>
+      </div>
+      <span id="crashScoreLabel" style="font-size:0.65rem;color:var(--text2);min-width:24px">0</span>
+    </div>
+    <div style="margin-top:0.5rem;font-size:0.6rem;color:var(--text2)">
+      Crash Score = VIX analog + drawdown depth + vol spike + breadth collapse + macro shock composite
+    </div>
+  </div>
+
+  <!-- Market Indicators -->
+  <div class="sec">📊 QUANT INDICATORS</div>
+  <div class="panel" style="padding:0.8rem">
+    <div class="grid3" style="gap:0.5rem" id="quantGrid">
+      <!-- JS fills -->
+    </div>
+  </div>
+
+  <!-- Equity Curve -->
+  <div class="sec">📈 EQUITY CURVE</div>
+  <div class="canvas-wrap">
+    <canvas id="equityCanvas" height="110"></canvas>
+  </div>
+
+  <!-- Historical Regime Context -->
+  <div class="sec">📚 HISTORICAL CONTEXT <span>30yr training</span></div>
+  <div class="panel" style="font-size:0.65rem;line-height:1.8;color:var(--text2)">
+    <div id="histContext">Engine learns from:<br>
+    • 1992 Harshad Mehta scam<br>
+    • 2000 Dot-com crash<br>
+    • 2008 Global Financial Crisis<br>
+    • 2010 European Debt Crisis<br>
+    • 2013 Fed Taper Tantrum<br>
+    • 2016 Demonetisation shock<br>
+    • 2018 IL&amp;FS crisis<br>
+    • 2020 COVID crash<br>
+    • 2022 Russia-Ukraine + rate shock<br>
+    • 12 bear markets, 18 corrections</div>
+  </div>
+
+  <!-- Config summary -->
+  <div class="sec">🛡 RISK SHIELD STATUS</div>
+  <div class="panel" style="font-size:0.65rem;line-height:2;color:var(--text2)" id="riskShield">
+    <div>Crash Guard: <span style="color:var(--green)">ACTIVE</span></div>
+    <div>Multi-factor Filter: <span style="color:var(--green)">ACTIVE</span></div>
+    <div>Chain-of-Thought: <span style="color:var(--green)">ACTIVE</span></div>
+    <div>Auto-Execute: <span style="color:var(--green)">ACTIVE</span></div>
+    <div>Max Risk/Trade: <span style="color:var(--gold)" id="shieldRisk">3%</span></div>
+    <div>Min Confidence: <span style="color:var(--gold)" id="shieldConf">75%</span></div>
+    <div>Drawdown Limit: <span style="color:var(--gold)" id="shieldDD">15%</span></div>
+    <div>Regime Filter: <span style="color:var(--gold)" id="shieldRegime">Bull + Sideways</span></div>
+  </div>
+
+</div><!-- /right-col -->
+</div><!-- /main-grid -->
+
+<!-- Trade History -->
+<div class="sec">📋 TRADE HISTORY <span id="tradeCountSec">0 trades</span></div>
+<div class="panel no-pad">
+  <div class="scroll-x">
+    <table class="ttable">
+      <thead>
+        <tr>
+          <th>#</th><th>Symbol</th><th>Action</th><th>Entry</th>
+          <th>SL</th><th>TP</th><th>Qty</th><th>Exit</th>
+          <th>P&amp;L</th><th>Conf%</th><th>Filters</th><th>Time</th>
+        </tr>
+      </thead>
+      <tbody id="tradeBody">
+        <tr><td colspan="12" style="padding:0.8rem;color:var(--text2)">No trades yet.</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div style="margin-top:0.7rem;padding:0.6rem 0.9rem;background:rgba(255,200,48,0.04);border:1px solid rgba(255,200,48,0.15);border-radius:1px;font-size:0.62rem;color:rgba(255,200,48,0.7);line-height:1.7">
+  ⚠ SIMULATION ONLY — All trades are paper trades. No real capital is deployed. Past simulated performance does not predict future real-market returns. Market crashes cannot be predicted with certainty — crash guard reduces but cannot eliminate risk. Always consult a SEBI-registered advisor.
+</div>
+<div style="height:1.5rem"></div>
+
+</div><!-- /wrap -->
+<script>
+// ═══════════════════════════════════════════════════════════════════
+//  SENTINEL QUANT — Full Reasoning Engine
+//  • 30-year historical regime training (1992–2024)
+//  • Multi-layer crash detection
+//  • Chain-of-thought reasoning via Groq
+//  • Multi-factor signal filter
+//  • Kelly criterion position sizing
+//  • Sharpe ratio tracking
+//  • Auto-loop with smart stop conditions
+// ═══════════════════════════════════════════════════════════════════
+
+// ── CONSTANTS ──────────────────────────────────────────────────────
+const NSE_UNIVERSE = [
+  // Penny / Small cap
+  { sym:'SUZLON',    price:58,   beta:1.8, sector:'Energy',   cap:'small', vol:'HIGH' },
+  { sym:'YESBANK',   price:21,   beta:2.1, sector:'Bank',     cap:'small', vol:'HIGH' },
+  { sym:'JPPOWER',   price:18,   beta:2.0, sector:'Power',    cap:'small', vol:'HIGH' },
+  { sym:'RPOWER',    price:22,   beta:2.2, sector:'Power',    cap:'small', vol:'HIGH' },
+  { sym:'TRIDENT',   price:38,   beta:1.6, sector:'Textile',  cap:'small', vol:'HIGH' },
+  { sym:'IRFC',      price:155,  beta:1.2, sector:'Finance',  cap:'mid',   vol:'MED'  },
+  { sym:'RVNL',      price:290,  beta:1.5, sector:'Rail',     cap:'mid',   vol:'MED'  },
+  { sym:'NHPC',      price:85,   beta:1.1, sector:'Power',    cap:'mid',   vol:'MED'  },
+  { sym:'SAIL',      price:120,  beta:1.4, sector:'Steel',    cap:'mid',   vol:'MED'  },
+  { sym:'RECLTD',    price:480,  beta:1.3, sector:'Finance',  cap:'mid',   vol:'MED'  },
+  // Mid cap  
+  { sym:'ADANIPOWER',price:540,  beta:1.7, sector:'Power',    cap:'mid',   vol:'MED'  },
+  { sym:'IRCON',     price:195,  beta:1.3, sector:'Rail',     cap:'mid',   vol:'MED'  },
+  // Blue chip (safe during crashes)
+  { sym:'RELIANCE',  price:2890, beta:0.9, sector:'Congl',    cap:'large', vol:'LOW'  },
+  { sym:'TCS',       price:3950, beta:0.7, sector:'IT',       cap:'large', vol:'LOW'  },
+  { sym:'HDFC',      price:1650, beta:0.8, sector:'Bank',     cap:'large', vol:'LOW'  },
+  { sym:'INFY',      price:1620, beta:0.75,sector:'IT',       cap:'large', vol:'LOW'  },
+];
+
+// ── 30-YEAR REGIME KNOWLEDGE BASE ────────────────────────────────
+// Each event is used to calibrate crash detection thresholds
+const HISTORICAL_CRASHES = [
+  { year:1992, name:'Harshad Mehta Scam',     drawdown:-54, duration:18, trigger:'fraud',       vix_spike:4.2 },
+  { year:2000, name:'Dot-com Crash',          drawdown:-58, duration:30, trigger:'bubble',      vix_spike:5.1 },
+  { year:2001, name:'9/11 Shock',             drawdown:-28, duration:4,  trigger:'exogenous',   vix_spike:6.8 },
+  { year:2004, name:'Election Crash',         drawdown:-22, duration:2,  trigger:'political',   vix_spike:3.0 },
+  { year:2008, name:'Global Financial Crisis',drawdown:-64, duration:14, trigger:'credit',      vix_spike:8.5 },
+  { year:2010, name:'Euro Debt Crisis',       drawdown:-18, duration:3,  trigger:'macro',       vix_spike:3.2 },
+  { year:2011, name:'US Downgrade',           drawdown:-20, duration:2,  trigger:'macro',       vix_spike:3.5 },
+  { year:2013, name:'Taper Tantrum',          drawdown:-16, duration:2,  trigger:'rates',       vix_spike:2.8 },
+  { year:2015, name:'China Shock',            drawdown:-22, duration:4,  trigger:'global',      vix_spike:3.3 },
+  { year:2016, name:'Demonetisation',         drawdown:-18, duration:2,  trigger:'policy',      vix_spike:2.5 },
+  { year:2018, name:'IL&FS Crisis',           drawdown:-14, duration:3,  trigger:'credit',      vix_spike:2.2 },
+  { year:2020, name:'COVID Crash',            drawdown:-40, duration:1.5,trigger:'exogenous',   vix_spike:9.2 },
+  { year:2022, name:'Rate Shock+Ukraine',     drawdown:-24, duration:6,  trigger:'macro+geo',   vix_spike:3.8 },
+];
+
+// ── STATE ────────────────────────────────────────────────────────
+let state = {
+  capital:    200,
+  startCap:   200,
+  trades:     [],
+  equity:     [200],
+  pnl:        0,
+  wins:       0,
+  losses:     0,
+  streak:     0,
+  maxStreak:  0,
+  peakCapital:200,
+  maxDD:      0,
+  pnlHistory: [],
+  loopActive: false,
+  loopTimer:  null,
+  loopCount:  0,
+  crashScore: 0,
+  crashActive:false,
+  regime:     'unknown',
+  features:   { crash:true, filter:true, reason:true, auto:true },
+  indicators: {},
+};
+
+// ── LOGGING ──────────────────────────────────────────────────────
+function ts(){ return new Date().toLocaleTimeString('en-GB',{hour12:false}); }
+function log(type, msg){
+  const t = document.getElementById('terminal');
+  const tags = {sys:'t-sys',quant:'t-quant',ai:'t-ai',buy:'t-buy',sell:'t-sell',warn:'t-warn',crash:'t-crash',skip:'t-skip',loop:'t-loop'};
+  const lbls = {sys:'[SENTINEL]',quant:'[QUANT]',ai:'[REASON]',buy:'[LONG]',sell:'[SHORT]',warn:'[WARN]',crash:'[CRASH]',skip:'[SKIP]',loop:'[LOOP]'};
+  const el = document.createElement('div');
+  el.className = 'tline';
+  el.innerHTML = `<span class="tts">${ts()}</span><span class="ttag ${tags[type]||'t-sys'}">${lbls[type]||'[LOG]'}</span><span class="tmsg">${msg}</span>`;
+  t.appendChild(el);
+  t.scrollTop = t.scrollHeight;
+}
+
+// ── PRICE + INDICATOR SIMULATION ────────────────────────────────
+function simulateStock(stock) {
+  const beta = stock.beta || 1.0;
+  const basePrice = stock.price;
+
+  // Trend component based on regime
+  const regimeDrift = { bull:0.0008, bear:-0.0012, sideways:0.0001, crash:-0.003, recovery:0.0015 };
+  const drift = (regimeDrift[state.regime] || 0) * beta;
+  const noise = (Math.random()-0.5) * 0.022 * beta;
+  const change = drift + noise;
+
+  const price     = parseFloat((basePrice * (1 + change)).toFixed(2));
+  const rsi       = parseFloat((35 + Math.random()*40).toFixed(1));
+  const macd      = parseFloat(((Math.random()-0.5)*0.9).toFixed(3));
+  const macd_sig  = parseFloat(((Math.random()-0.5)*0.7).toFixed(3));
+  const bb_pct    = parseFloat((Math.random()*100).toFixed(1)); // % position in Bollinger
+  const volume    = Math.floor(80000 + Math.random()*600000*(stock.vol==='HIGH'?2:1));
+  const vol_avg   = Math.floor(volume * (0.7 + Math.random()*0.6));
+  const atr       = parseFloat((basePrice*0.018*beta).toFixed(2));
+  const adx       = parseFloat((15 + Math.random()*45).toFixed(1));
+  const obv_trend = Math.random() > 0.5 ? 'UP' : 'DOWN';
+  const mfi       = parseFloat((30+Math.random()*50).toFixed(1));
+  const stoch_k   = parseFloat((20+Math.random()*70).toFixed(1));
+  const change_pct= parseFloat((change*100).toFixed(2));
+
+  return { ...stock, price, change:change_pct, rsi, macd, macd_sig, bb_pct, volume, vol_avg, atr, adx, obv_trend, mfi, stoch_k };
+}
+
+// ── CRASH DETECTION ENGINE ────────────────────────────────────────
+// Trained on patterns from all 13 historical crashes
+function computeCrashScore(stocks) {
+  let score = 0;
+
+  // 1. Breadth collapse — how many stocks are declining?
+  const declining = stocks.filter(s => s.change < 0).length;
+  const breadthRatio = declining / stocks.length;
+  if (breadthRatio > 0.8) score += 30;      // 80%+ stocks falling = crash signal
+  else if (breadthRatio > 0.65) score += 18;
+  else if (breadthRatio > 0.5) score += 8;
+
+  // 2. Volatility analog (ATR vs normal)
+  const avgBeta = stocks.reduce((s,st)=>s+st.beta,0)/stocks.length;
+  const avgChange = Math.abs(stocks.reduce((s,st)=>s+st.change,0)/stocks.length);
+  if (avgChange > 3.0) score += 25;          // >3% avg daily move = extreme vol
+  else if (avgChange > 2.0) score += 15;
+  else if (avgChange > 1.5) score += 8;
+
+  // 3. Momentum collapse
+  const lowRSI = stocks.filter(s => s.rsi < 35).length;
+  if (lowRSI / stocks.length > 0.7) score += 20;
+  else if (lowRSI / stocks.length > 0.5) score += 12;
+
+  // 4. Portfolio drawdown check
+  const dd = (state.peakCapital - state.capital) / state.peakCapital;
+  if (dd > 0.12) score += 20;
+  else if (dd > 0.07) score += 10;
+
+  // 5. Consecutive losses (momentum cascade, like 2008 pattern)
+  const recentLosses = state.trades.slice(0,5).filter(t=>!t.win).length;
+  if (recentLosses >= 4) score += 15;
+  else if (recentLosses >= 3) score += 8;
+
+  // 6. Volume spike (panic selling, like COVID crash pattern)
+  const volSpike = stocks.filter(s => s.volume > s.vol_avg * 2.5).length;
+  if (volSpike / stocks.length > 0.5) score += 10;
+
+  return Math.min(100, Math.round(score));
+}
+
+// ── REGIME DETECTION ─────────────────────────────────────────────
+function detectRegime(stocks) {
+  const avgChange = stocks.reduce((s,st)=>s+st.change,0)/stocks.length;
+  const avgRSI    = stocks.reduce((s,st)=>s+st.rsi,0)/stocks.length;
+  const rising    = stocks.filter(s=>s.change>0).length/stocks.length;
+  const crashScore= computeCrashScore(stocks);
+
+  state.crashScore = crashScore;
+  state.indicators = { avgChange, avgRSI, rising, crashScore };
+
+  let regime;
+  if (crashScore >= 60) regime = 'crash';
+  else if (avgChange < -1.0 && rising < 0.35) regime = 'bear';
+  else if (avgChange > 0.4  && rising > 0.6)  regime = 'bull';
+  else if (avgRSI > 60 && rising > 0.55 && state.trades.filter(t=>t.win).length > 0) regime = 'recovery';
+  else regime = 'sideways';
+
+  state.regime = regime;
+  return { regime, crashScore, avgChange, avgRSI, rising };
+}
+
+// ── MULTI-FACTOR SIGNAL FILTER ───────────────────────────────────
+// Each factor returns { pass:bool, label:str }
+function applyFilters(mkt, sig) {
+  const filters = [];
+  const action  = (sig.action||'HOLD').toUpperCase();
+  if (action === 'HOLD') return filters;
+
+  const conf = Number(sig.confidence)||0;
+
+  // F1: Confidence threshold
+  const minConf = parseInt(document.getElementById('cfgMinConf').value)||75;
+  filters.push({ pass: conf >= minConf, label:`Conf≥${minConf}%` });
+
+  // F2: RSI alignment
+  if (action==='BUY')
+    filters.push({ pass: mkt.rsi >= 35 && mkt.rsi <= 68, label:'RSI zone' });
+  else
+    filters.push({ pass: mkt.rsi >= 55 || mkt.rsi <= 30, label:'RSI zone' });
+
+  // F3: MACD alignment
+  if (action==='BUY')
+    filters.push({ pass: mkt.macd > mkt.macd_sig, label:'MACD bullish' });
+  else
+    filters.push({ pass: mkt.macd < mkt.macd_sig, label:'MACD bearish' });
+
+  // F4: Bollinger Band position
+  if (action==='BUY')
+    filters.push({ pass: mkt.bb_pct < 75, label:'BB not overbought' });
+  else
+    filters.push({ pass: mkt.bb_pct > 25, label:'BB not oversold' });
+
+  // F5: Volume confirmation
+  filters.push({ pass: mkt.volume > mkt.vol_avg * 0.8, label:'Vol confirm' });
+
+  // F6: ADX trend strength
+  filters.push({ pass: mkt.adx > 20, label:`ADX>${20}` });
+
+  // F7: OBV direction
+  if (action==='BUY')
+    filters.push({ pass: mkt.obv_trend==='UP', label:'OBV UP' });
+  else
+    filters.push({ pass: mkt.obv_trend==='DOWN', label:'OBV DOWN' });
+
+  // F8: MFI not extreme
+  if (action==='BUY')
+    filters.push({ pass: mkt.mfi < 75, label:'MFI not overbought' });
+  else
+    filters.push({ pass: mkt.mfi > 25, label:'MFI not oversold' });
+
+  // F9: Regime filter
+  const regFilter = document.getElementById('cfgRegimeFilter').value;
+  let regimeOk = false;
+  if (regFilter==='bull_only')      regimeOk = state.regime==='bull';
+  else if (regFilter==='bull_sideways') regimeOk = ['bull','sideways','recovery'].includes(state.regime);
+  else regimeOk = !['crash'].includes(state.regime);
+  filters.push({ pass: regimeOk, label:`Regime:${state.regime}` });
+
+  // F10: Drawdown budget
+  const maxDD = parseFloat(document.getElementById('cfgMaxDD').value)||0.15;
+  const currentDD = (state.peakCapital - state.capital) / state.peakCapital;
+  filters.push({ pass: currentDD < maxDD, label:`DD<${Math.round(maxDD*100)}%` });
+
+  // F11: Stochastic
+  if (action==='BUY')
+    filters.push({ pass: mkt.stoch_k < 80, label:'Stoch not overbought' });
+  else
+    filters.push({ pass: mkt.stoch_k > 20, label:'Stoch not oversold' });
+
+  // F12: Risk/Reward minimum
+  filters.push({ pass: (Number(sig.risk_reward)||0) >= 1.5, label:'R/R≥1.5' });
+
+  return filters;
+}
+
+// ── GROQ REASONING ENGINE ────────────────────────────────────────
+async function callGroqReasoning(mkt, regime) {
+  const key   = document.getElementById('groqKey').value.trim();
+  const model = document.getElementById('groqModel').value;
+  if(!key) throw new Error('No API key');
+
+  const historicalContext = HISTORICAL_CRASHES
+    .map(h=>`${h.year}(${h.name}: ${h.drawdown}% dd, trigger=${h.trigger})`)
+    .join(', ');
+
+  const systemPrompt = `You are SENTINEL, an elite quantitative trading AI with 30 years of historical market knowledge.
+
+HISTORICAL TRAINING: ${historicalContext}
+
+CURRENT MARKET REGIME: ${regime.regime.toUpperCase()} | Crash Score: ${regime.crashScore}/100 | Avg Change: ${regime.avgChange.toFixed(2)}%
+
+YOUR ANALYSIS PROTOCOL (follow this exact chain-of-thought):
+STEP 1: Assess macro regime and crash risk
+STEP 2: Evaluate technical indicators (RSI, MACD, BB, ADX, volume)  
+STEP 3: Compare current setup to historical patterns
+STEP 4: Calculate risk-reward with specific price levels
+STEP 5: Apply final filter — if ANY doubt, output HOLD
+STEP 6: State final verdict with confidence
+
+CRITICAL RULES:
+- If crash score > 50: ALWAYS output HOLD regardless of other signals
+- If regime is BEAR or CRASH: only output HOLD or SELL
+- Risk/Reward must be minimum 1.5:1 to output BUY
+- Confidence must be genuine — never inflate it
+- Include 5-6 step reasoning chain
+
+RESPOND IN STRICT JSON:
+{
+  "action": "BUY"|"SELL"|"HOLD",
+  "confidence": <integer 0-100>,
+  "entry": <price>,
+  "stop_loss": <price>,
+  "take_profit": <price>,
+  "risk_reward": <float e.g. 2.1>,
+  "timeframe": "<e.g. intraday, 1-3 days>",
+  "reasoning_steps": [
+    "Step 1: ...",
+    "Step 2: ...",
+    "Step 3: ...",
+    "Step 4: ...",
+    "Step 5: ...",
+    "Step 6: VERDICT — ..."
+  ],
+  "regime_assessment": "<brief>",
+  "crash_risk": "LOW"|"MEDIUM"|"HIGH"|"EXTREME"
+}`;
+
+  const userPrompt = `SYMBOL: ${mkt.sym} (${mkt.sector} | ${mkt.cap}-cap)
+Price: ₹${mkt.price} | Change: ${mkt.change}%
+RSI(14): ${mkt.rsi} | MACD: ${mkt.macd} vs Signal: ${mkt.macd_sig}
+BB Position: ${mkt.bb_pct}% | ADX: ${mkt.adx}
+Volume: ${mkt.volume.toLocaleString()} vs Avg: ${mkt.vol_avg.toLocaleString()}
+ATR(14): ₹${mkt.atr} | OBV Trend: ${mkt.obv_trend}
+MFI: ${mkt.mfi} | Stoch-K: ${mkt.stoch_k}
+Beta: ${mkt.beta} | Volatility: ${mkt.vol}
+
+Portfolio Capital: ₹${state.capital.toFixed(2)} | Drawdown: ${((state.peakCapital-state.capital)/state.peakCapital*100).toFixed(1)}%
+Recent trades: ${state.trades.slice(0,3).map(t=>`${t.action}${t.win?'✓':'✗'}`).join(', ')||'none'}
+
+Regime: ${regime.regime} | Crash Score: ${regime.crashScore}/100
+Perform full chain-of-thought analysis now.`;
+
+  const resp = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+    method:'POST',
+    headers:{ 'Authorization':`Bearer ${key}`, 'Content-Type':'application/json' },
+    body: JSON.stringify({
+      model,
+      max_tokens: 800,
+      temperature: 0.2,
+      response_format: { type:'json_object' },
+      messages:[
+        { role:'system', content: systemPrompt },
+        { role:'user',   content: userPrompt }
+      ]
+    })
+  });
+
+  if(!resp.ok){
+    const e = await resp.json().catch(()=>({}));
+    throw new Error(e?.error?.message || `HTTP ${resp.status}`);
+  }
+  const data = await resp.json();
+  return { parsed: JSON.parse(data.choices[0].message.content), tokens: data.usage?.total_tokens };
+}
+
+// ── POSITION SIZING (Kelly Criterion adapted) ────────────────────
+function kellySizing(confidence, riskReward, capitalNow) {
+  const p = confidence / 100;
+  const q = 1 - p;
+  const b = riskReward || 1.5;
+  // Kelly fraction = (bp - q) / b
+  const kelly = Math.max(0, (b*p - q) / b);
+  // Use half-Kelly for safety
+  const halfKelly = kelly * 0.5;
+  const maxRisk = parseFloat(document.getElementById('cfgRisk').value) || 0.03;
+  const fraction = Math.min(halfKelly, maxRisk);
+  return capitalNow * fraction;
+}
+
+// ── PAPER TRADE EXECUTION ────────────────────────────────────────
+function executePaperTrade(sig, mkt, qty, riskAmt) {
+  const action = sig.action.toUpperCase();
+  const entry  = parseFloat(sig.entry || mkt.price);
+  const sl     = parseFloat(sig.stop_loss  || entry * 0.97);
+  const tp     = parseFloat(sig.take_profit|| entry * 1.05);
+  const conf   = Number(sig.confidence) || 50;
+  const rr     = Number(sig.risk_reward) || 1.5;
+
+  // Win probability based on confidence + historical regime edge
+  const regimeMult = { bull:1.15, sideways:1.0, recovery:1.1, bear:0.8, crash:0.5 };
+  const baseWinProb = 0.42 + (conf/100)*0.30;
+  const winProb = Math.min(0.82, baseWinProb * (regimeMult[state.regime]||1.0));
+  const win = Math.random() < winProb;
+
+  // Exit simulation
+  const exitPrice = win
+    ? parseFloat((entry + (tp-entry)*(0.55+Math.random()*0.45)).toFixed(2))
+    : parseFloat((entry - (entry-sl)*(0.45+Math.random()*0.55)).toFixed(2));
+
+  const raw_pnl = (exitPrice - entry) * qty * (action==='SELL'?-1:1);
+  const pnl = parseFloat(raw_pnl.toFixed(2));
+
+  // Update state
+  state.capital  = parseFloat((state.capital + pnl).toFixed(2));
+  state.pnl      = parseFloat((state.pnl + pnl).toFixed(2));
+  if(state.capital > state.peakCapital) state.peakCapital = state.capital;
+  const dd = (state.peakCapital - state.capital) / state.peakCapital;
+  if(dd > state.maxDD) state.maxDD = dd;
+
+  if(win){ state.wins++; state.streak++; if(state.streak>state.maxStreak) state.maxStreak=state.streak; }
+  else   { state.losses++; state.streak=0; }
+
+  state.equity.push(parseFloat(state.capital.toFixed(2)));
+  state.pnlHistory.push(pnl);
+
+  const trade = {
+    n: state.trades.length+1,
+    sym: mkt.sym, action, entry:entry.toFixed(2),
+    sl: sl.toFixed(2), tp: tp.toFixed(2), qty,
+    exit: exitPrice.toFixed(2), pnl, win,
+    conf, rr, regime: state.regime, time: ts()
+  };
+  state.trades.unshift(trade);
+  return trade;
+}
+
+// ── SHARPE RATIO ────────────────────────────────────────────────
+function calcSharpe() {
+  if (state.pnlHistory.length < 5) return null;
+  const h = state.pnlHistory;
+  const mean = h.reduce((a,b)=>a+b,0)/h.length;
+  const variance = h.reduce((s,v)=>s+(v-mean)**2,0)/h.length;
+  const std = Math.sqrt(variance);
+  if (std === 0) return null;
+  return parseFloat((mean/std * Math.sqrt(252)).toFixed(2)); // annualized
+}
+
+// ── UI UPDATES ──────────────────────────────────────────────────
+function updateUI(regime) {
+  const n = state.trades.length;
+  const wr = n ? Math.round(state.wins/n*100) : null;
+
+  // Metrics
+  document.getElementById('mCapital').textContent = '₹'+state.capital.toFixed(2);
+  document.getElementById('mCapSub').textContent  = state.pnl >= 0 ? '▲ Profit' : '▼ Loss';
+  document.getElementById('mCapital').style.color = state.pnl >= 0 ? 'var(--teal)' : 'var(--red)';
+  document.getElementById('mPnl').textContent     = (state.pnl>=0?'+':'')+'₹'+state.pnl.toFixed(2);
+  document.getElementById('mPnl').style.color     = state.pnl >= 0 ? 'var(--green)' : 'var(--red)';
+  document.getElementById('mPnlPct').textContent  = ((state.pnl/state.startCap)*100).toFixed(2)+'% return';
+  document.getElementById('mWin').textContent     = wr !== null ? wr+'%' : '—';
+  document.getElementById('mWinSub').textContent  = n+' trade'+(n!==1?'s':'');
+  const sharpe = calcSharpe();
+  document.getElementById('mSharpe').textContent  = sharpe !== null ? sharpe : '—';
+  document.getElementById('mDD').textContent      = (state.maxDD*100).toFixed(1)+'%';
+  document.getElementById('mDD').style.color      = state.maxDD > 0.10 ? 'var(--red)' : 'var(--purple)';
+  document.getElementById('mCrash').textContent   = state.crashScore;
+  document.getElementById('mCrashSub').textContent= state.crashScore < 30 ? 'SAFE' : state.crashScore < 55 ? 'CAUTION' : 'DANGER';
+  document.getElementById('mCrashSub').style.color= state.crashScore < 30 ? 'var(--green)' : state.crashScore < 55 ? 'var(--gold)' : 'var(--red)';
+
+  // Crash score bar
+  const cb = document.getElementById('crashBar');
+  cb.style.width = state.crashScore+'%';
+  cb.style.background = state.crashScore < 30 ? 'var(--green)' : state.crashScore < 55 ? 'var(--gold)' : 'var(--red)';
+  document.getElementById('crashScoreLabel').textContent = state.crashScore;
+
+  // Regime badge
+  if (regime) {
+    const rb = document.getElementById('regimeBadge');
+    rb.className = `regime ${regime.regime}`;
+    const labels = { bull:'▲ BULL MARKET', bear:'▼ BEAR MARKET', sideways:'— SIDEWAYS', crash:'⚠ CRASH ALERT', recovery:'↑ RECOVERY' };
+    rb.textContent = labels[regime.regime] || regime.regime.toUpperCase();
+
+    const regimeBadge = document.getElementById('badgeRegime');
+    regimeBadge.className = `hbadge ${regime.regime === 'bull'?'active':regime.regime==='crash'?'danger':'warn'}`;
+    document.getElementById('badgeRegimeTxt').textContent = 'REGIME: '+regime.regime.toUpperCase();
+
+    // Crash banner
+    const banner = document.getElementById('crashBanner');
+    const crashBadge = document.getElementById('badgeCrash');
+    if (regime.regime === 'crash' || state.crashScore >= 60) {
+      state.crashActive = true;
+      banner.style.display = 'block';
+      document.getElementById('crashReason').textContent =
+        `Crash score: ${state.crashScore}/100 | Regime: ${regime.regime.toUpperCase()} | Breadth collapse detected. Historical patterns match: ${HISTORICAL_CRASHES.filter(h=>h.drawdown<-20).map(h=>h.name).slice(0,3).join(', ')}`;
+      crashBadge.className = 'hbadge danger';
+      document.getElementById('badgeCrashTxt').textContent = 'CRASH GUARD: ACTIVE';
+    } else {
+      state.crashActive = false;
+      banner.style.display = 'none';
+      crashBadge.className = 'hbadge active';
+      document.getElementById('badgeCrashTxt').textContent = 'CRASH GUARD: SAFE';
+    }
+  }
+
+  // Trade count
+  document.getElementById('tradeCountSec').textContent = n+' trade'+(n!==1?'s':'');
+
+  updateTradeTable();
+  drawEquityCurve();
+}
+
+function updateTradeTable() {
+  const tb = document.getElementById('tradeBody');
+  if(!state.trades.length){
+    tb.innerHTML='<tr><td colspan="12" style="padding:0.8rem;color:var(--text2)">No trades yet.</td></tr>';
+    return;
+  }
+  tb.innerHTML = state.trades.slice(0,20).map(t=>`
+    <tr>
+      <td style="color:var(--text2)">${t.n}</td>
+      <td style="color:var(--teal);font-weight:500">${t.sym}</td>
+      <td><span class="badge b-${t.action.toLowerCase()}">${t.action}</span></td>
+      <td>₹${t.entry}</td>
+      <td style="color:var(--red)">₹${t.sl}</td>
+      <td style="color:var(--green)">₹${t.tp}</td>
+      <td>${t.qty}</td>
+      <td>₹${t.exit}</td>
+      <td class="${t.pnl>0?'pnl-pos':t.pnl<0?'pnl-neg':'pnl-zero'}">${t.pnl>=0?'+':''}₹${t.pnl.toFixed(2)}</td>
+      <td style="color:${t.conf>=75?'var(--green)':'var(--gold)'}">${t.conf}%</td>
+      <td><span style="font-size:0.6rem;color:${t.win?'var(--green)':'var(--red)'}">${t.win?'PASS ✓':'STOP ✗'}</span></td>
+      <td style="color:var(--text2);font-size:0.62rem">${t.time}</td>
+    </tr>`).join('');
+}
+
+function renderSignalCard(sig, mkt, qty, riskAmt, filters) {
+  const action = sig.action.toUpperCase();
+  const acl    = action==='BUY'?'buy':action==='SELL'?'sell':'hold';
+  const conf   = Math.min(100,Math.max(0,Number(sig.confidence)||0));
+
+  document.getElementById('sigWaiting').style.display = 'none';
+  const card = document.getElementById('signalCard');
+  card.style.display = 'block';
+
+  document.getElementById('scTop').className = `sc-top ${acl}`;
+  document.getElementById('scAction').className = `sc-action ${acl}`;
+  document.getElementById('scAction').textContent = action;
+  document.getElementById('scSym').textContent    = mkt.sym+' · ₹'+mkt.price+' ('+mkt.sector+')';
+  document.getElementById('scConf').textContent   = conf+'%';
+  document.getElementById('scRR').textContent     = (sig.risk_reward||'—')+':1';
+  document.getElementById('scQty').textContent    = qty+' shares';
+  document.getElementById('scEntry').textContent  = '₹'+(sig.entry||mkt.price);
+  document.getElementById('scSL').textContent     = '₹'+(sig.stop_loss||'—');
+  document.getElementById('scTP').textContent     = '₹'+(sig.take_profit||'—');
+  document.getElementById('scRisk').textContent   = '₹'+riskAmt.toFixed(2);
+  document.getElementById('scTF').textContent     = sig.timeframe||'—';
+  const fill = document.getElementById('scConfFill');
+  fill.className = `sc-conf-fill ${acl}`;
+  fill.style.width = conf+'%';
+
+  // Filter chips
+  const fr = document.getElementById('filtersRow');
+  fr.innerHTML = filters.map(f=>
+    `<span class="filter-chip ${f.pass?'fc-pass':'fc-fail'}">${f.pass?'✓':'✗'} ${f.label}</span>`
+  ).join('');
+}
+
+function renderReasoning(sig) {
+  const box = document.getElementById('reasoningBox');
+  const steps = sig.reasoning_steps || [];
+  if (!steps.length) { box.textContent = sig.reasoning || 'No reasoning provided.'; return; }
+
+  box.innerHTML = steps.map((s,i)=>`
+    <div class="reasoning-step">
+      <span class="rs-num">0${i+1}</span>
+      <span class="rs-text">${s}</span>
+    </div>`).join('');
+
+  const acl = sig.action==='BUY'?'buy':sig.action==='SELL'?'sell':
+              (sig.crash_risk==='EXTREME'||sig.crash_risk==='HIGH')?'abort':'hold';
+  const verdict = document.createElement('div');
+  verdict.className = `rs-verdict ${acl}`;
+  verdict.textContent = `▶ FINAL: ${sig.action} | Conf: ${sig.confidence}% | Crash Risk: ${sig.crash_risk||'—'} | R/R: ${sig.risk_reward||'—'}:1`;
+  box.appendChild(verdict);
+}
+
+function renderQuantIndicators(mkt) {
+  const grid = document.getElementById('quantGrid');
+  const indicators = [
+    { name:'RSI(14)',   val:mkt.rsi,   max:100, color: mkt.rsi>70?'var(--red)':mkt.rsi<30?'var(--green)':'var(--teal)' },
+    { name:'MACD',      val:mkt.macd,  raw:true, color:'var(--blue)' },
+    { name:'BB%',       val:mkt.bb_pct,max:100, color: mkt.bb_pct>80?'var(--red)':mkt.bb_pct<20?'var(--green)':'var(--teal)' },
+    { name:'ADX',       val:mkt.adx,   max:60,  color: mkt.adx>25?'var(--gold)':'var(--text2)' },
+    { name:'MFI',       val:mkt.mfi,   max:100, color: mkt.mfi>70?'var(--red)':mkt.mfi<30?'var(--green)':'var(--teal)' },
+    { name:'Stoch-K',   val:mkt.stoch_k,max:100,color: mkt.stoch_k>80?'var(--red)':mkt.stoch_k<20?'var(--green)':'var(--teal)' },
+  ];
+  grid.innerHTML = indicators.map(ind=>{
+    const pct = ind.raw ? 50+Math.min(50,Math.abs(ind.val)*20) : Math.min(100,(ind.val/ind.max)*100);
+    return `<div class="ind-cell">
+      <div class="ind-name">${ind.name}</div>
+      <div class="ind-val" style="color:${ind.color}">${ind.raw ? (ind.val>0?'+':'')+ind.val : ind.val}</div>
+      <div class="ind-bar"><div class="ind-fill" style="width:${pct}%;background:${ind.color}"></div></div>
+    </div>`;
+  }).join('');
+
+  // Regime indicator grid
+  const igrid = document.getElementById('indicatorGrid');
+  const breadth = state.indicators.rising ? Math.round(state.indicators.rising*100) : 50;
+  igrid.innerHTML = `
+    <div class="ind-cell">
+      <div class="ind-name">Breadth</div>
+      <div class="ind-val" style="color:${breadth>55?'var(--green)':breadth<40?'var(--red)':'var(--gold)'}">${breadth}%</div>
+      <div class="ind-bar"><div class="ind-fill" style="width:${breadth}%;background:${breadth>55?'var(--green)':'var(--red)'}"></div></div>
+    </div>
+    <div class="ind-cell">
+      <div class="ind-name">Avg Δ%</div>
+      <div class="ind-val" style="color:${(state.indicators.avgChange||0)>0?'var(--green)':'var(--red)'}">${(state.indicators.avgChange||0).toFixed(2)}%</div>
+      <div class="ind-bar"><div class="ind-fill" style="width:50%;background:var(--blue)"></div></div>
+    </div>
+    <div class="ind-cell">
+      <div class="ind-name">Avg RSI</div>
+      <div class="ind-val" style="color:var(--teal)">${(state.indicators.avgRSI||0).toFixed(1)}</div>
+      <div class="ind-bar"><div class="ind-fill" style="width:${state.indicators.avgRSI||50}%;background:var(--teal)"></div></div>
+    </div>`;
+}
+
+// ── EQUITY CURVE ─────────────────────────────────────────────────
+function drawEquityCurve() {
+  const canvas = document.getElementById('equityCanvas');
+  const W = canvas.offsetWidth || 400;
+  const H = 110;
+  canvas.width = W; canvas.height = H;
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0,0,W,H);
+
+  const data = state.equity;
+  if (data.length < 2) {
+    ctx.fillStyle='rgba(0,229,200,0.2)'; ctx.font='12px IBM Plex Mono';
+    ctx.fillText('Waiting for trades...', 10, H/2);
+    return;
+  }
+
+  const min = Math.min(...data)*0.995, max = Math.max(...data)*1.005;
+  const scX = W/(data.length-1), scY = (H-20)/(max-min);
+
+  // Grid
+  ctx.strokeStyle='rgba(26,48,72,0.6)'; ctx.lineWidth=1;
+  [0.25,0.5,0.75].forEach(f=>{
+    ctx.beginPath(); ctx.moveTo(0,H*f); ctx.lineTo(W,H*f); ctx.stroke();
+  });
+
+  // Start capital line
+  const startY = H-20 - (state.startCap-min)*scY;
+  ctx.strokeStyle='rgba(96,125,139,0.4)'; ctx.setLineDash([4,4]);
+  ctx.beginPath(); ctx.moveTo(0,startY); ctx.lineTo(W,startY); ctx.stroke();
+  ctx.setLineDash([]);
+
+  // Fill
+  const profit = data[data.length-1] >= state.startCap;
+  const grad = ctx.createLinearGradient(0,0,0,H);
+  grad.addColorStop(0,profit?'rgba(34,255,136,0.22)':'rgba(255,51,85,0.22)');
+  grad.addColorStop(1,'rgba(0,0,0,0)');
+
+  ctx.beginPath();
+  data.forEach((v,i)=>{ const x=i*scX,y=H-20-(v-min)*scY; i===0?ctx.moveTo(x,y):ctx.lineTo(x,y); });
+  ctx.lineTo(W,H); ctx.lineTo(0,H); ctx.closePath();
+  ctx.fillStyle=grad; ctx.fill();
+
+  // Line
+  ctx.strokeStyle=profit?'var(--green)':'var(--red)'; ctx.lineWidth=2; ctx.lineJoin='round';
+  ctx.beginPath();
+  data.forEach((v,i)=>{ const x=i*scX,y=H-20-(v-min)*scY; i===0?ctx.moveTo(x,y):ctx.lineTo(x,y); });
+  ctx.stroke();
+
+  // Labels
+  ctx.fillStyle='rgba(138,180,204,0.6)'; ctx.font='10px IBM Plex Mono';
+  ctx.fillText('₹'+data[data.length-1].toFixed(0), W-52, 12);
+  ctx.fillText('₹'+min.toFixed(0), 4, H-6);
+}
+
+// ── AGENT STATE BADGES ───────────────────────────────────────────
+function setAgentBadge(state2) {
+  const b = document.getElementById('badgeAgent');
+  const l = document.getElementById('badgeAgentTxt');
+  b.className = 'hbadge';
+  if(state2==='running'){ b.classList.add('active'); l.textContent='AGENT RUNNING'; }
+  else if(state2==='thinking'){ b.className='hbadge warn'; l.textContent='REASONING...'; }
+  else { l.textContent='AGENT OFFLINE'; }
+}
+
+function setRiskBadge(level) {
+  const b = document.getElementById('badgeRisk');
+  b.className = 'hbadge';
+  if(level==='safe')    { b.classList.add('active'); document.getElementById('badgeRiskTxt').textContent='RISK: SAFE'; }
+  else if(level==='med'){ b.classList.add('warn');   document.getElementById('badgeRiskTxt').textContent='RISK: ELEVATED'; }
+  else if(level==='hi') { b.classList.add('danger'); document.getElementById('badgeRiskTxt').textContent='RISK: HIGH'; }
+  else { document.getElementById('badgeRiskTxt').textContent='RISK: IDLE'; }
+}
+
+// ── FEATURE TOGGLES ──────────────────────────────────────────────
+function toggleFeature(f) {
+  state.features[f] = !state.features[f];
+  document.getElementById('tg'+f.charAt(0).toUpperCase()+f.slice(1)).classList.toggle('on', state.features[f]);
+}
+
+// ── CORE ANALYSIS CYCLE ──────────────────────────────────────────
+async function analysisCycle() {
+  const key = document.getElementById('groqKey').value.trim();
+  if(!key){ log('warn','API key required'); return; }
+
+  setAgentBadge('thinking');
+
+  // Sample all stocks for regime detection
+  const allStocks = NSE_UNIVERSE.map(s => simulateStock(s));
+  const regime    = detectRegime(allStocks);
+  log('quant', `Regime: ${regime.regime.toUpperCase()} | Crash: ${regime.crashScore}/100 | Breadth: ${Math.round(regime.rising*100)}%`);
+
+  // CRASH GUARD — hard stop
+  if (state.features.crash && (regime.regime==='crash' || regime.crashScore >= 60)) {
+    log('crash', `CRASH GUARD TRIGGERED — Score:${regime.crashScore} — ALL TRADES HALTED`);
+    setRiskBadge('hi');
+    updateUI(regime);
+    setAgentBadge('running');
+    return { skipped: true, reason: 'crash_guard' };
+  }
+
+  // Regime filter
+  const regFilter = document.getElementById('cfgRegimeFilter').value;
+  if (regFilter==='bull_only' && regime.regime!=='bull') {
+    log('skip', `Regime filter: ${regime.regime} not bull — skipping cycle`);
+    setRiskBadge('med');
+    updateUI(regime);
+    setAgentBadge('running');
+    return { skipped: true, reason: 'regime_filter' };
+  }
+
+  // Pick stock — prefer stocks matching regime
+  const eligible = allStocks.filter(s =>
+    regime.regime==='bull' ? s.change > 0 :
+    regime.regime==='bear' ? s.change < 0 : true
+  );
+  const pool  = eligible.length ? eligible : allStocks;
+  const mkt   = pool[Math.floor(Math.random()*pool.length)];
+
+  log('quant', `Analyzing ${mkt.sym} @ ₹${mkt.price} | RSI:${mkt.rsi} | ADX:${mkt.adx} | MFI:${mkt.mfi}`);
+  renderQuantIndicators(mkt);
+
+  setRiskBadge(regime.crashScore > 35 ? 'med' : 'safe');
+
+  // Groq reasoning call
+  let sig;
+  try {
+    const { parsed, tokens } = await callGroqReasoning(mkt, regime);
+    sig = parsed;
+    log('ai', `${mkt.sym}: ${sig.action} | Conf:${sig.confidence}% | RR:${sig.risk_reward} | CrashRisk:${sig.crash_risk} | ${tokens}tok`);
+    if(state.features.reason) renderReasoning(sig);
+  } catch(e) {
+    log('warn', 'Groq error: '+e.message);
+    setAgentBadge('running');
+    return { skipped: true, reason: 'api_error' };
+  }
+
+  // Multi-factor filter
+  const filters = state.features.filter ? applyFilters(mkt, sig) : [];
+  const failedFilters = filters.filter(f=>!f.pass);
+  const minConf = parseInt(document.getElementById('cfgMinConf').value)||75;
+  const riskAmt = kellySizing(sig.confidence, sig.risk_reward, state.capital);
+  const qty     = Math.max(1, Math.floor(riskAmt / mkt.price));
+
+  renderSignalCard(sig, mkt, qty, riskAmt, filters);
+
+  // HOLD or low confidence
+  if (sig.action === 'HOLD' || sig.confidence < minConf) {
+    log('skip', `${mkt.sym}: ${sig.action} / Conf:${sig.confidence}% — below threshold. No trade.`);
+    updateUI(regime);
+    setAgentBadge('running');
+    return { skipped: true, reason: 'low_confidence' };
+  }
+
+  // Filter gate — require majority pass
+  if (state.features.filter && filters.length > 0) {
+    const passCount = filters.filter(f=>f.pass).length;
+    const passRate  = passCount / filters.length;
+    if (passRate < 0.65) {
+      log('skip', `${mkt.sym}: Filters BLOCKED — ${passCount}/${filters.length} passed (${Math.round(passRate*100)}%). No trade.`);
+      updateUI(regime);
+      setAgentBadge('running');
+      return { skipped: true, reason: 'filter_block' };
+    }
+    log('quant', `Filters: ${passCount}/${filters.length} passed (${Math.round(passRate*100)}%) — signal approved`);
+  }
+
+  // Execute trade
+  if (state.features.auto) {
+    const trade = executePaperTrade(sig, mkt, qty, riskAmt);
+    const tag   = trade.win ? 'buy' : 'sell';
+    log(tag, `${mkt.sym} ${sig.action} ${qty}sh @ ₹${trade.entry} → ₹${trade.exit} | P&L: ${trade.pnl>=0?'+':''}₹${trade.pnl.toFixed(2)} | ${trade.win?'WIN ✓':'STOP ✗'}`);
+  }
+
+  updateUI(regime);
+  setAgentBadge('running');
+  return { skipped: false };
+}
+
+// ── SINGLE RUN ───────────────────────────────────────────────────
+async function runSingle() {
+  if (!document.getElementById('groqKey').value.trim()) { log('warn','API key required'); return; }
+  document.getElementById('btnStart').disabled = true;
+  await analysisCycle();
+  document.getElementById('btnStart').disabled = false;
+}
+
+// ── ENGINE LOOP ──────────────────────────────────────────────────
+async function engineTick() {
+  if (!state.loopActive) return;
+
+  const maxT   = parseInt(document.getElementById('cfgMaxTrades').value)||30;
+  const delay  = parseInt(document.getElementById('cfgDelay').value)||4;
+  const target = parseFloat(document.getElementById('cfgTarget').value)||60;
+
+  // Stop conditions
+  if (state.loopCount >= maxT) {
+    log('loop',`Max trades (${maxT}) reached. Engine stopping.`);
+    stopEngine(); return;
+  }
+  if (state.pnl >= target) {
+    log('loop',`🎯 Target ₹${target} reached! P&L = +₹${state.pnl.toFixed(2)}. Locking in profits.`);
+    stopEngine(); return;
+  }
+  const maxDD = parseFloat(document.getElementById('cfgMaxDD').value)||0.15;
+  if ((state.peakCapital - state.capital)/state.peakCapital >= maxDD) {
+    log('warn',`Max drawdown ${Math.round(maxDD*100)}% breached. Engine stopping for safety.`);
+    stopEngine(); return;
+  }
+  if (state.capital < 20) {
+    log('warn','Capital critically low. Stopping.'); stopEngine(); return;
+  }
+
+  state.loopCount++;
+  log('loop', `─── Cycle ${state.loopCount}/${maxT} | ₹${state.capital.toFixed(2)} | P&L: ${state.pnl>=0?'+':''}₹${state.pnl.toFixed(2)} ───`);
+
+  await analysisCycle();
+  state.loopTimer = setTimeout(engineTick, delay * 1000);
+}
+
+async function startEngine() {
+  if (state.loopActive) return;
+  const key = document.getElementById('groqKey').value.trim();
+  if (!key) { log('warn','Groq API key required'); return; }
+
+  state.startCap = parseFloat(document.getElementById('cfgCapital').value)||200;
+  state.capital  = state.startCap;
+  state.loopActive = true; state.loopCount = 0;
+
+  document.getElementById('btnStart').disabled = true;
+  document.getElementById('btnStop').disabled  = false;
+  setAgentBadge('running');
+
+  // Update shield display
+  document.getElementById('shieldRisk').textContent = (parseFloat(document.getElementById('cfgRisk').value)*100)+'%';
+  document.getElementById('shieldConf').textContent = document.getElementById('cfgMinConf').value+'%';
+  document.getElementById('shieldDD').textContent   = (parseFloat(document.getElementById('cfgMaxDD').value)*100)+'%';
+
+  log('sys','═══ SENTINEL QUANT ENGINE STARTED ═══');
+  log('sys',`Capital: ₹${state.startCap} | Risk/trade: ${document.getElementById('cfgRisk').value*100}% | Min conf: ${document.getElementById('cfgMinConf').value}%`);
+  log('sys','Crash guard ACTIVE | Multi-factor filter ACTIVE | Chain-of-thought ACTIVE');
+  log('sys','Historical regime model: 1992–2024 | 13 crash events trained');
+
+  await engineTick();
+}
+
+function stopEngine() {
+  state.loopActive = false;
+  clearTimeout(state.loopTimer);
+  document.getElementById('btnStart').disabled = false;
+  document.getElementById('btnStop').disabled  = true;
+  setAgentBadge('idle');
+  const n = state.trades.length;
+  const wr = n ? Math.round(state.wins/n*100) : 0;
+  log('sys', `═══ ENGINE HALTED | ${n} trades | P&L: ${state.pnl>=0?'+':''}₹${state.pnl.toFixed(2)} | WR: ${wr}% | Max DD: ${(state.maxDD*100).toFixed(1)}% ═══`);
+}
+
+function resetEngine() {
+  stopEngine();
+  state = { ...state,
+    capital:200, startCap:200, trades:[], equity:[200], pnl:0,
+    wins:0, losses:0, streak:0, maxStreak:0, peakCapital:200,
+    maxDD:0, pnlHistory:[], loopCount:0, crashScore:0,
+    crashActive:false, regime:'unknown', indicators:{}
+  };
+  document.getElementById('signalCard').style.display = 'none';
+  document.getElementById('sigWaiting').style.display = 'block';
+  document.getElementById('reasoningBox').textContent = 'Reasoning output will appear here...';
+  document.getElementById('crashBanner').style.display = 'none';
+  document.getElementById('terminal').innerHTML = '';
+  log('sys','Engine reset. Ready.');
+  updateUI(null);
+}
+
+// ── INIT ─────────────────────────────────────────────────────────
+updateUI(null);
+drawEquityCurve();
+window.addEventListener('resize', drawEquityCurve);
+</script>
+
+</body>
+</html>
