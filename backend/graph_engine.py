@@ -551,11 +551,13 @@ class GraphEngine:
             os.getenv("ENV") == "paper"
         )
         
+        # FIX 1: Capture regime once at start of cycle to avoid race conditions (Issue #1)
+        cycle_regime = state.regime
         threshold = int(cfg.get("min_conf", 75))
-        if is_paper:
-            threshold = 55
-            logger.info(f"[SNIPER] Paper Mode: Relaxing threshold to {threshold}%")
-
+        
+        # FIX: UI setting should be respected in paper mode too (Issue #4)
+        # if is_paper: threshold = 55 
+        
         if self.status == "DRAINING":
             _skip("[DRAINING] Skipping new entry — waiting for active missions to close.")
             state.action_taken = "SKIP"; return state
@@ -566,6 +568,7 @@ class GraphEngine:
         bear_desc      = state.__dict__.get("_bear_reversal_desc", "No conditions met")
         rsi            = mkt.get("rsi", 50)
         bb_pct         = mkt.get("bb_pct", 50)
+        price          = mkt.get("price", 0)
         frac           = float(cfg.get("risk", 0.03)) # 3% default loss tolerance
         forced_conf    = None
         
@@ -578,8 +581,8 @@ class GraphEngine:
             bb_pct        = mkt.get("bb_pct", 50)
             
             # Universal Heuristic: Trade anything with high conviction or extreme oversold
-            # ENTRY GUARD: Bull regime blocks entries if RSI >= 60 to avoid overbought tops (Issue 2)
-            if state.regime == "bull":
+            # FIX: Use captured cycle_regime (Bug #1) and enforce RSI guard (Bug #2)
+            if cycle_regime == "bull":
                 can_entry = (score >= 35 or conditions_met >= 2) and rsi < 60
             else:
                 can_entry = score >= 30 or conditions_met >= 2 or (rsi < 35 and bb_pct < 30)
@@ -588,18 +591,24 @@ class GraphEngine:
                 forced_conf = 65 if score >= 40 else 60
                 sig["action"] = "BUY"
                 
-                # Regime-aware risk bounds
-                if state.regime == "bull":
-                    sig["stop_loss"]   = round(mkt['price'] * 0.970, 6)
-                    sig["take_profit"] = round(mkt['price'] * 1.030, 6)
-                elif state.regime == "bear":
-                    sig["stop_loss"]   = round(mkt['price'] * 0.975, 6)
-                    sig["take_profit"] = round(mkt['price'] * 1.020, 6)
+                # FIX 2: Compute per-unit price levels, not rupee amounts (Bug #2)
+                # Ensure SL/TP are relative to quote price, NOT deploy/qty
+                if cycle_regime == "bull":
+                    sig["stop_loss"]   = round(price * 0.970, 6)
+                    sig["take_profit"] = round(price * 1.030, 6)
+                elif cycle_regime == "bear":
+                    sig["stop_loss"]   = round(price * 0.975, 6)
+                    sig["take_profit"] = round(price * 1.020, 6)
                 else: # sideways
-                    sig["stop_loss"]   = round(mkt['price'] * 0.980, 6)
-                    sig["take_profit"] = round(mkt['price'] * 1.015, 6)
+                    sig["stop_loss"]   = round(price * 0.980, 6)
+                    sig["take_profit"] = round(price * 1.015, 6)
 
                 sig["confidence"] = forced_conf
+                
+                # FIX 3: Heuristic MUST respect UI min_conf threshold (Issue #4)
+                if forced_conf < threshold:
+                    _skip(f"Heuristic conf {forced_conf}% < min threshold {threshold}%")
+                    state.action_taken = "SKIP"; return state
                 sig["risk_reward"] = abs(sig["take_profit"] - mkt['price']) / max(abs(mkt['price'] - sig["stop_loss"]), 0.0001)
                 logger.info(f"[SNIPER] HEURISTIC ENTRY ({state.regime}): score={score:.0f} rsi={rsi:.0f} -> conf={forced_conf}%")
 
@@ -709,7 +718,7 @@ class GraphEngine:
             stop_loss=sl,
             take_profit=tp,
             trailing_stop=trailing,
-            regime_at_entry=state.regime,
+            regime_at_entry=cycle_regime,
             exchange=mkt.get("exchange", "NSE"),
             asset_type=mkt.get("asset", "equity"),
             atr_at_entry=atr,
@@ -719,7 +728,8 @@ class GraphEngine:
             vats_multiplier_k=k,
         )
 
-        port.open_mission(mission, entry * qty)
+        # FIX 5: Available capital check must use ₹ reserved amount (Issue #5)
+        port.open_mission(mission, final_value) 
         state.action_taken = "OPEN"
         state.mission_id   = mission.id
 
@@ -982,6 +992,16 @@ class GraphEngine:
                     "level": "sys",
                     "time": datetime.datetime.now().strftime("%H:%M:%S"),
                 })
+            
+            # Restore recent failure memories for Déjà-vu checks (Issue #9)
+            rest_mem = await self.vec_mem.restore_memories()
+            if rest_mem:
+                await self._emit({
+                    "type": "log",
+                    "msg": f"🧠 MEMORY: Loaded {rest_mem} failure patterns from {self.vec_mem.table}",
+                    "level": "sys",
+                    "time": datetime.datetime.now().strftime("%H:%M:%S"),
+                })
 
             guardian_task = asyncio.create_task(self.guardian_loop())
 
@@ -1139,6 +1159,8 @@ class GraphEngine:
             "crashScore":  self.engine.state.crash_score,
             "maxDd":       round(portfolio.max_dd * 100, 2),
             "trades":      len(portfolio.completed_missions),
+            "memories":    len(self.vec_mem._local), # FIX 9: Show real pattern count
+            "scout_status": self.scout.nse.get_status() if hasattr(self.scout.nse, 'get_status') else "Active",
             "activeMissions": portfolio.active_count,
             "market":      self.last_market,
             "tf_confluence": self.tf_confluence,

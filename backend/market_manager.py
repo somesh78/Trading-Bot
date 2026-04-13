@@ -207,7 +207,9 @@ class CryptoScreener:
             return {
                 "sym":      sym,
                 "exchange": "CRYPTO",
-                "asset":    "crypto",
+                "asset_class": "DIGITAL_ASSET",
+                "asset_type": "token",
+                "asset": "crypto",
                 "price":    round(price, 6),
                 "change":   round(change, 3),
                 "volume":   volume,
@@ -492,7 +494,7 @@ class NSEScreener:
             ticker_sym = f"{sym}{suffix}" if suffix else sym
             t = yf.Ticker(ticker_sym)
             try:
-                df = t.history(period="20d", interval="1d")
+                df = t.history(period="7d", interval="1h")
             except Exception as history_err:
                 logger.debug(f"[NSE] Skipping {ticker_sym}: {history_err}")
                 return None

@@ -294,6 +294,35 @@ class VectorMemory:
         self._db      = _SupabaseClient(supabase_url, supabase_key) if self.enabled else None
         self._local: List[dict] = []
         self.table    = "sentinel_memories_paper" if is_paper else "sentinel_memories"
+        self._total_count = 0 # Cached DB count
+
+    async def restore_memories(self) -> int:
+        """Load recent memories from Supabase into local cache."""
+        if not self.enabled:
+            return 0
+        try:
+            rows = await self._db.select(self.table, order="created_at.desc", limit=100)
+            self._local = []
+            for r in rows:
+                try:
+                    data = json.loads(r["data"]) if isinstance(r["data"], str) else r["data"]
+                    # Embedding string '[0.1, ...]' to list
+                    emb_str = r.get("embedding", "[]")
+                    emb = json.loads(emb_str.replace("'", '"')) if isinstance(emb_str, str) else emb_str
+                    self._local.append({
+                        "vector": emb, 
+                        "data": data, 
+                        "win": r.get("win", False), 
+                        "sym": r.get("sym", "?")
+                    })
+                except Exception:
+                    continue
+            self._total_count = len(self._local)
+            logger.info(f"[MEMORY] Restored {self._total_count} memories from {self.table}")
+            return self._total_count
+        except Exception as e:
+            logger.warning(f"[MEMORY] Restore failed: {e}")
+            return 0
 
     async def store(self, mission_dict: dict, trade_memory_dict: dict) -> bool:
         feature = {

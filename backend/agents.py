@@ -578,6 +578,14 @@ class GuardianAgent:
             mission.peak_pnl = unrealized
 
         # ── Decision Logic ──
+        # FIX 7: Minimum 1 cycle hold to prevent same-cycle stopouts (Issue #7)
+        if mission.check_count < 2:
+            verdict = "STAY"
+            reason = "Entry grace period: first evaluation cycle"
+            entry = f"[{mission.last_check}] {verdict}: {reason}"
+            mission.guardian_verdicts.append(entry)
+            return {"verdict": verdict, "reason": reason, "vats": mission.trailing_stop,
+                    "unrealized_pnl": mission.unrealized_pnl, "checks": mission.check_count}
 
         # BLACK SWAN: News threat → move to breakeven first
         if news_threat in ("HIGH", "EXTREME") and mission.status != MissionStatus.BREAKEVEN:

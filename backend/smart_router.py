@@ -201,13 +201,23 @@ class SmartRouter:
     def __init__(self, api_key: Optional[str] = None, broadcast_fn = None):
         self.api_key          = api_key or os.getenv("GROQ_KEY") or os.getenv("OPENROUTER_KEY")
         self._broadcast       = broadcast_fn
-        self.base_url         = "https://openrouter.ai/api/v1"
+        
+        # FIX: Detect if we should hit Groq directly instead of via OpenRouter
+        if self.api_key and self.api_key.startswith("gsk_"):
+            self.base_url = "https://api.groq.com/openai/v1"
+            self.is_groq  = True
+            logger.info("[ROUTER] Groq key detected - using native Groq endpoint")
+        else:
+            self.base_url = "https://openrouter.ai/api/v1"
+            self.is_groq  = False
+
         self._cooloff_until:  float = 0
         self._cooloff_duration = 60   # base cooloff — doubles each consecutive 429
         self._cooloff_max      = 300  # cap at 5 minutes
         self._consecutive_429  = 0
+        self.primary_dead       = False # FIX 8: Session-level 429 fallback status
         self._last_429_notified = 0   # timestamp of last UI notification
-        self._stats           = {"calls": 0, "failures": 0, "429s": 0, "heuristics": 0, "api_cooling": False, "cooloff_remaining": 0}
+        self._stats           = {"calls": 0, "failures": 0, "429s": 0, "heuristics": 0, "api_cooling": False, "cooloff_remaining": 0, "primary_dead": False}
 
     def _get_headers(self) -> Dict[str, str]:
         return {
@@ -223,8 +233,18 @@ class SmartRouter:
         Returns content string or None on any failure.
         """
         self._stats["calls"] += 1
+        # Map models if using native Groq
+        actual_model = model
+        if getattr(self, "is_groq", False):
+            if "llama-3.3-70b" in model:
+                actual_model = "llama-3.3-70b-versatile"
+            elif "gemini" in model:
+                actual_model = "deepseek-r1-distill-llama-70b" # Best secondary on Groq
+            elif "nemotron" in model:
+                actual_model = "llama-3.1-8b-instant"          # Fast backup
+
         payload = {
-            "model": model,
+            "model": actual_model,
             "messages": [
                 {"role": "system", "content": system},
                 {"role": "user",   "content": prompt},
@@ -261,10 +281,17 @@ class SmartRouter:
                                 "msg": f"AI ROUTER: API_COOLING — backoff {backoff}s (429 ×{self._consecutive_429})",
                                 "level": "warn"
                             }))
+                    if self._consecutive_429 >= 3:
+                        self.primary_dead = True
+                        self._stats["primary_dead"] = True
                     return None
 
                 if r.status_code == 404:
                     logger.warning(f"[ROUTER] 404 on {model} - model not available, skipping")
+                    return None
+
+                if r.status_code == 401:
+                    logger.error(f"❌ [ROUTER] AUTH ERROR (401) on {model}: {r.text[:120]}. Check your GROQ_KEY or OPENROUTER_KEY in .env!")
                     return None
 
                 if r.status_code >= 400:
@@ -305,10 +332,13 @@ class SmartRouter:
 
         now = time.time()
 
-        # Build the model order respecting cool-off
-        if now < self._cooloff_until:
-            remaining = int(self._cooloff_until - now)
-            logger.info(f"[ROUTER] Primary in cool-off ({remaining}s left) - starting at secondary")
+        # Build the model order respecting cool-off and "primary_dead" status (Issue #8)
+        if self.primary_dead or now < self._cooloff_until:
+            remaining = int(self._cooloff_until - now) if now < self._cooloff_until else 0
+            if self.primary_dead:
+                logger.debug("[ROUTER] Llama-3 429 cap reached - avoiding primary model for session.")
+            else:
+                logger.info(f"[ROUTER] Primary in cool-off ({remaining}s left) - starting at secondary")
             chain = [SECONDARY_MODEL, TERTIARY_MODEL]
         else:
             chain = MODEL_CHAIN
