@@ -156,6 +156,7 @@ class Mission:
     created_at: str = ""
     last_check: str = ""
     guardian_verdicts: List[str] = field(default_factory=list)
+    data: Dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         d = asdict(self)
@@ -207,6 +208,7 @@ class PortfolioManager:
         self.losses = 0
         self.peak_capital = capital
         self.max_dd = 0.0
+        self._mission_reservations: Dict[str, float] = {}   # Track exact reserved amount per mission
 
     @property
     def available_capital(self) -> float:
@@ -228,6 +230,7 @@ class PortfolioManager:
     def open_mission(self, mission: Mission, capital_reserved: float):
         self.missions[mission.id] = mission
         self.reserved_capital += capital_reserved
+        self._mission_reservations[mission.id] = capital_reserved
         mission.peak_price = mission.entry_price
 
     def close_mission(self, mission_id: str, exit_price: float) -> Optional[Mission]:
@@ -242,7 +245,10 @@ class PortfolioManager:
 
         self.capital += pnl
         self.total_realized_pnl += pnl
-        self.reserved_capital = max(0, self.reserved_capital - m.entry_price * m.qty)
+        
+        # FIX: Subtract exact reserved amount tracking per mission ID to avoid bleed
+        reserved = self._mission_reservations.pop(mission_id, m.entry_price * m.qty)
+        self.reserved_capital = max(0, self.reserved_capital - reserved)
 
         if self.capital > self.peak_capital:
             self.peak_capital = self.capital
@@ -272,7 +278,12 @@ class PortfolioManager:
         m.status = MissionStatus.TRIMMED
         self.capital += pnl
         self.total_realized_pnl += pnl
-        self.reserved_capital = max(0, self.reserved_capital - m.entry_price * trim_qty)
+        
+        # Proportionally reduce reservation
+        full_reserve = self._mission_reservations.get(mission_id, m.entry_price * (m.qty + trim_qty))
+        trimmed_reserve = (trim_qty / (m.qty + trim_qty)) * full_reserve
+        self._mission_reservations[mission_id] = full_reserve - trimmed_reserve
+        self.reserved_capital = max(0, self.reserved_capital - trimmed_reserve)
         if pnl > 0:
             self.wins += 1
         return pnl

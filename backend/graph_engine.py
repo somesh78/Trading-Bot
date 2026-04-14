@@ -237,6 +237,7 @@ class GraphEngine:
             n_candidates=15,
             min_conviction=5.0,
             primary_market=self.config.get("primary_market", "AUTO"),
+            available_capital=self.swarm.portfolio.available_capital,
         )
 
         if not candidates:
@@ -354,22 +355,53 @@ class GraphEngine:
             # returned N/A — even though DOT-USD / BNB-USD at rank 2/3 would have passed.
             target = None
             rank_note = ""
+            is_paper = (self.config.get("env") == "paper" or os.getenv("ENV") == "paper")
+            threshold = int(self.config.get("min_conf", 55))
+            
             if self.config.get("use_multi_timeframe"):
                 for candidate in available:
                     conf, _ = self.swarm.mtf.validate(candidate, "BUY", live=False)
-                    if conf >= 0.50:
-                        target = candidate
-                        break
-                    else:
+                    if conf < 0.50:
                         logger.info(
                             f"[SCOUT] {candidate['sym']} rejected early: "
                             f"MTF confluence {conf:.2f} < 0.50 — trying next candidate"
                         )
                         await self._emit({
                             "type": "log",
-                            "msg": f"[SCOUT] {candidate['sym']} skipped: MTF={conf:.2f} < gate — checking next ranked asset",
+                            "msg": f"[SCOUT] {candidate['sym']} skipped: MTF={conf:.2f} < gate — checking next",
                             "level": "skip", "time": state.timestamp,
                         })
+                        continue
+
+                    # Pre-flight check: if candidate will fail heuristic entry later, skip it now
+                    score = candidate.get("_score", 0)
+                    rsi = candidate.get("rsi", 50)
+                    bb_pct = candidate.get("bb_pct", 50)
+                    
+                    if is_paper:
+                        if state.regime == "bull":
+                            can_entry = (score >= 10) and rsi < 65
+                        elif state.regime == "bear" and rsi > 60:
+                            can_entry = score >= 8
+                        else:
+                            can_entry = (score >= 5 and rsi < 70) or (rsi < 40 and bb_pct < 30)
+                            
+                        # Estimate forced_conf inside _node_execute
+                        forced_conf = 70 if score >= 20 else 65
+                        forced_conf = max(forced_conf, threshold)
+                        
+                        if not can_entry or forced_conf < threshold:
+                            logger.info(f"[SCOUT] {candidate['sym']} rejected early: fails heuristic pre-flight (can_entry={can_entry}, score={score}, rsi={rsi}, regime={state.regime}, conf={forced_conf} < {threshold})")
+                            await self._emit({
+                                "type": "log",
+                                "msg": f"[SCOUT] {candidate['sym']} skipped: Fails heuristic limits — checking next",
+                                "level": "skip", "time": state.timestamp,
+                            })
+                            continue
+
+                    target = candidate
+                    break
+
                 if not target:
                     logger.info(f"[SCOUT] All {len(available)} candidates failed MTF gate — no target this cycle")
                     await self._emit({
@@ -489,11 +521,20 @@ class GraphEngine:
         """Multi-timeframe confluence check. In bear regime, uses weighted scoring."""
         if not state.market or not state.signal:
             return state
+        signal = state.signal
+        if isinstance(signal, list):
+            text = " ".join(block.get("text", "") if isinstance(block, dict) else str(block) for block in signal)
+            signal = {"action": "HOLD", "confidence": 40, "reasoning": text}
+            state.signal = signal
+
+
+
         action = state.signal.get("action", "HOLD")
         live   = bool(self.config.get("live_data"))
 
         # Layer 1: Bear regime gets regime-aware weighted MTF instead of simple majority
-        if state.regime == "bear" and not live:
+        # ONLY apply to BUY/reversal setups; SELL setups in bear regime follow the primary trend
+        if state.regime == "bear" and action == "BUY" and not live:
             weighted, conditions_met, desc = self.swarm.mtf.validate_bear_reversal(state.market)
             state.tf_confluence = weighted
             self.tf_confluence = weighted
@@ -522,6 +563,14 @@ class GraphEngine:
         """Query VectorMemory — déjà-vu guard against repeating known failures."""
         if not state.signal or not state.market:
             return state
+        signal = state.signal
+        if isinstance(signal, list):
+            text = " ".join(block.get("text", "") if isinstance(block, dict) else str(block) for block in signal)
+            signal = {"action": "HOLD", "confidence": 40, "reasoning": text}
+            state.signal = signal
+
+
+
         if state.signal.get("action") == "HOLD":
             return state
 
@@ -593,15 +642,17 @@ class GraphEngine:
         if is_paper and forced_conf is None:
             if regime == "bull":
                 can_entry = (score >= 10 or conditions_met >= 2) and rsi < 65
-            elif regime == "bear" and rsi > 60:
+            elif regime == "bear" and rsi < 40:
                 # Oversold bounce in bear — mean reversion entry
                 can_entry = score >= 8
                 if can_entry:
                     forced_conf = 60
                     logger.info(f"[SNIPER] Bear bounce entry: score={score} rsi={rsi}")
             else:
-                # Sideways / unknown — lower bar, rely on MTF & VATS for risk management
-                can_entry = score >= 5 or conditions_met >= 2 or (rsi < 40 and bb_pct < 30)
+                # Sideways / unknown — RSI ceiling of 70 prevents entering overbought assets.
+                # BNB at RSI 76-78 in sideways = immediate stop-loss on reversal → repeated
+                # ANALYST cooldowns that block better candidates. Score gate alone is insufficient.
+                can_entry = (score >= 5 and rsi < 70) or conditions_met >= 2 or (rsi < 40 and bb_pct < 30)
 
             if can_entry:
                 if not forced_conf:
@@ -678,8 +729,10 @@ class GraphEngine:
             state.action_taken = "SKIP"; return state
 
         # ── Loss Cooldown ──
-        if self.cycle_count - self._last_loss_cycle < 3:
-            _skip(f"Loss cooldown active ({3 - (self.cycle_count - self._last_loss_cycle)} cycles left)")
+        # Fix: ensure cycle count progress is positive and within range
+        cycles_since_loss = self.cycle_count - self._last_loss_cycle
+        if 0 <= cycles_since_loss < 3:
+            _skip(f"Loss cooldown active ({3 - cycles_since_loss} cycles left)")
             state.action_taken = "SKIP"; return state
 
         if not cfg.get("auto_execute", True):
@@ -757,6 +810,12 @@ class GraphEngine:
             created_at=state.timestamp,
             peak_price=entry,
             vats_multiplier_k=k,
+            data={
+                "rsi_at_entry": rsi,
+                "adx_at_entry": mkt.get("adx", 25.0),
+                "bb_pct_at_entry": bb_pct,
+                "change_at_entry": mkt.get("change", 0.0),
+            }
         )
 
         # FIX 5: Available capital check must use ₹ reserved amount (Issue #5)
@@ -901,10 +960,10 @@ class GraphEngine:
                     if closed:
                         asyncio.create_task(self.checkpoint.delete_mission(mid))
                         asyncio.create_task(self._store_memory(closed))
-                        mem = self.swarm.analyst.analyze_trade(closed)
+                        # Removed duplicate analyze_trade call here (Issue #2)
                         await self._emit({
                             "type": "log",
-                            "msg": f"EXIT: {closed.sym} PnL:₹{closed.unrealized_pnl:.2f} | {mem.lesson}",
+                            "msg": f"EXIT: {closed.sym} PnL:₹{closed.unrealized_pnl:.2f}",
                             "level": "buy" if closed.unrealized_pnl >= 0 else "sell",
                             "time": now,
                         })
@@ -953,12 +1012,25 @@ class GraphEngine:
             timestamp=now,
         )
 
-        # Run the graph
-        state = await self._graph.run(state, entry="scan")
+        # ── PRE-FLIGHT: Update Global State BEFORE Graph Execution (Critical) ──
+        # 1. First scan (used for regime and VIX)
+        state = await self._node_scan(state)
+        
+        # 2. Update Regime
+        if state.all_stocks:
+            detected = self.engine.detect_regime(state.all_stocks)
+            state.regime      = detected["regime"]
+            state.crash_score = detected["crashScore"]
+            self.engine.state.regime      = state.regime
+            self.engine.state.crash_score = state.crash_score
 
-        # Update VIX proxy
+        # 3. Update VIX proxy
         vix_rel = self.vix_proxy.update(state.all_stocks)
         state.__dict__["vix_rel"] = vix_rel
+        
+        # 4. Now run the rest of the graph (target selection onwards)
+        state = await self._graph.run(state, entry="circuit_breaker")
+        
         # Cache for _state_dict (header badge)
         self._last_exchange = state.active_exchange
 
@@ -971,13 +1043,8 @@ class GraphEngine:
         self.engine.state.crash_score = state.crash_score
         self.engine.state.max_dd      = self.swarm.portfolio.max_dd
 
-        # Regime detection
-        if state.all_stocks:
-            detected = self.engine.detect_regime(state.all_stocks)
-            state.regime      = detected["regime"]
-            state.crash_score = detected["crashScore"]
-            self.engine.state.regime      = state.regime
-            self.engine.state.crash_score = state.crash_score
+        # Regime detection handled pre-graph to fix ordering bug
+
 
         mode = "LIVE" if self.config.get("live_data") else "SIM"
         await self._emit({
@@ -1164,11 +1231,11 @@ class GraphEngine:
             closed.to_dict(),
             {
                 "pattern_tag":    mem.pattern_tag,
-                "rsi_at_entry":   closed.data.get("rsi_at_entry", 50.0) if hasattr(closed, 'data') else 50.0,
-                "change_at_entry": 0.0,
-                "vol_ratio":      1.0,
-                "adx_at_entry":   25.0,
-                "bb_pct_at_entry": 50.0,
+                "rsi_at_entry":   closed.data.get("rsi_at_entry", 50.0),
+                "change_at_entry": closed.data.get("change_at_entry", 0.0),
+                "vol_ratio":      closed.data.get("vol_ratio", 1.0),
+                "adx_at_entry":   closed.data.get("adx_at_entry", 25.0),
+                "bb_pct_at_entry": closed.data.get("bb_pct_at_entry", 50.0),
             },
         )
         if not mem.win:

@@ -164,6 +164,12 @@ NSE_UNIVERSE = [
     "HINDALCO.NS", "TATASTEEL.NS", "COALINDIA.NS", "ONGC.NS", "IOC.NS",
 ]
 
+PENNY_STOCK_UNIVERSE = [
+    # Low-priced / Penny stocks (Indian and US)
+    "SUZLON.NS", "YESBANK.NS", "IDEA.NS", "RPOWER.NS", "JPPOWER.NS",
+    "GMRINFRA.NS", "IRFC.NS", "SNDL", "MULN", "CEI", "ZOM"
+]
+
 
 class CryptoScreener:
     """
@@ -675,6 +681,7 @@ class GlobalScoutAgent:
         n_candidates: int = 6,
         min_conviction: float = 12.0,
         primary_market: str = "AUTO",
+        available_capital: float = 1000.0,
     ) -> Tuple[List[Dict], str]:
         """
         Scan all universes based on market hours and return top scoring assets.
@@ -686,23 +693,28 @@ class GlobalScoutAgent:
         
         all_candidates: List[Dict] = []
         
+        # Determine active universe based on capital
+        is_low_capital = available_capital < 100.0
+        
         # 1. Crypto is ALWAYS available 24/7
         crypto_assets = await self.crypto.scan_top_inplay(n_pick=10)
         all_candidates.extend(crypto_assets)
         
         # 2. US Equities (NYSE/NASDAQ)
         if weekday < 5 and 13 <= hour < 20:
+            active_us = PENNY_STOCK_UNIVERSE if is_low_capital else US_STOCK_UNIVERSE
             us_assets = await self.nse.scan_top_inplay(
-                seeds=US_STOCK_UNIVERSE, suffix="",
-                n_seeds=len(US_STOCK_UNIVERSE), n_pick=10, min_vol_ratio=0.8
+                seeds=active_us, suffix="",
+                n_seeds=len(active_us), n_pick=10, min_vol_ratio=0.8
             )
             all_candidates.extend(us_assets)
             
         # 3. Indian Equities (NSE)
         if weekday < 5 and 3 <= hour < 10:
+            active_nse = PENNY_STOCK_UNIVERSE if is_low_capital else NSE_UNIVERSE
             nse_assets = await self.nse.scan_top_inplay(
-                seeds=NSE_UNIVERSE, suffix="",
-                n_seeds=len(NSE_UNIVERSE), n_pick=10, min_vol_ratio=0.8
+                seeds=active_nse, suffix="",
+                n_seeds=len(active_nse), n_pick=10, min_vol_ratio=0.8
             )
             all_candidates.extend(nse_assets)
             

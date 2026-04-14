@@ -240,7 +240,8 @@ class SupabaseCheckpoint:
                 rows = await self._db.select(self.table, order="updated_at.desc")
             else:
                 rows = []
-                self.enabled = False
+                # Removed permanent disabling of DB on failure (Issue #6)
+                logger.warning("[CHECKPOINT] Database table not found — operating in-memory for this cycle")
         else:
             rows = [{"id": k, "data": json.dumps(v)} for k, v in self._local.items()]
 
