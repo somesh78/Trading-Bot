@@ -1242,6 +1242,11 @@ class GraphEngine:
             self._last_loss_cycle = self.cycle_count
             logger.info(f"[ANALYST] Loss detected. Activating cooldown for 3 cycles (Cycle {self.cycle_count})")
 
+    @property
+    def is_running(self) -> bool:
+        """Helper for legacy checks in main.py."""
+        return self.status != "STOPPED"
+
     def _state_dict(self) -> Dict:
         """Bridge to legacy state format expected by the frontend."""
         portfolio = self.swarm.portfolio

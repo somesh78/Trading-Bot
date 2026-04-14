@@ -136,7 +136,7 @@ async def websocket_endpoint(ws: WebSocket):
             # ── start ──────────────────────────────────────────
             if msg_type == "start":
                 if _engine and _engine.is_running:
-                    await ws.send_json({"type": "log", "msg": "Engine already running.",
+                    await ws.send_json({"type": "log", "msg": f"Engine already {_engine.status}.",
                                         "level": "warn"})
                     continue
 
@@ -163,8 +163,10 @@ async def websocket_endpoint(ws: WebSocket):
             elif msg_type == "stop":
                 if _engine:
                     _engine.stop()
-                await _broadcast({"type": "status", "status": "idle"})
-                logger.info("[MAIN] Engine stopped.")
+                    # If missions active, it enters DRAIN mode. Notify UI.
+                    status = "draining" if _engine.status == "DRAINING" else "idle"
+                    await _broadcast({"type": "status", "status": status})
+                    logger.info(f"[MAIN] Engine stop requested (Mode: {status}).")
 
             # ── ping ───────────────────────────────────────────
             elif msg_type == "ping":

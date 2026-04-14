@@ -13,9 +13,9 @@ interface SidebarControlsProps {
 
 export const SidebarControls: React.FC<SidebarControlsProps> = ({ onStart, onStop }) => {
   const [config, setConfig] = useState({
-    groq_key: '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',
-    supabase_url: 'https://uejsdhpfrshphmnildme.supabase.co',
-    supabase_key: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVlanNkaHBmcnNocGhtbmlsZG1lIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3NTkxNjEwNiwiZXhwIjoyMDkxNDkyMTA2fQ.KJ7n0q7MMu547LRBJNdWxLWjJdq5Muf3jNlgXZemftw',
+    groq_key: '',
+    supabase_url: '',
+    supabase_key: '',
     capital: 100000,
     risk: 0.03,
     min_conf: 70,
